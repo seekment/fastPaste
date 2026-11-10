@@ -21,7 +21,8 @@ impl AppState {
     pub fn log(&self, msg: String) {
         let mut g = self.log.lock();
         g.push(format!("{} {}", now_ms(), msg));
-        if g.len() > 500 { g.drain(..g.len() - 500); }
+        let n = g.len();
+        if n > 500 { g.drain(..n - 500); }
     }
 }
 

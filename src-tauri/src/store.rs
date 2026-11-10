@@ -159,7 +159,7 @@ impl Store {
                 self.append_wal(&WalRecord::Touch { id, ts })?;
                 return Ok(RecordOutcome::Duplicate(id));
             }
-            AddOutcome::New(id) => {}
+            AddOutcome::New(_) => {}
         }
         let id = self.index.snapshot().by_hash[&hash];
 
@@ -194,7 +194,7 @@ impl Store {
         Ok(RecordOutcome::New(id))
     }
 
-    fn write_item_file(&self, rel: &str, ct: ContentType, id: u64, payload: &ClipPayload) -> io::Result<()> {
+    fn write_item_file(&mut self, rel: &str, ct: ContentType, id: u64, payload: &ClipPayload) -> io::Result<()> {
         let mut buf = Vec::new();
         buf.extend_from_slice(MAGIC);
         buf.extend_from_slice(&ITEM_VER.to_le_bytes());
@@ -324,25 +324,24 @@ impl Store {
             for f in [Some(&m.item_file), m.blob_ref.as_ref(), m.thumb_ref.as_ref()].into_iter().flatten() {
                 let disk = self.dir.join(f);
                 if disk.exists() {
-                    zw.start_file(f, opts)?;
+                    zw.start_file(f.as_str(), opts)?;
                     zw.write_all(&fs::read(&disk)?)?;
                 }
             }
         }
-        zw.finish().map(|_| ())
+        zw.finish().map_err(io::Error::other)
     }
 
     pub fn import_archive(&mut self, zip_path: &Path) -> io::Result<usize> {
         let mut zr = zip::ZipArchive::new(File::open(zip_path)?)?;
         let mut count = 0;
         // read the archive's snapshot bytes first; NEVER overwrite the local index.bin
-        let mut imported_bytes: Option<Vec<u8>> = None;
-        {
+        let imported_bytes: Vec<u8> = {
             let mut e = zr.by_name("index.bin").map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
             let mut b = Vec::with_capacity(e.size() as usize);
             e.read_to_end(&mut b)?;
-            imported_bytes = Some(b);
-        }
+            b
+        };
         let names: Vec<String> = (0..zr.len())
             .filter_map(|i| zr.by_index(i).ok().and_then(|e| e.mangled_name().to_str().map(|s| s.to_string())))
             .collect();
@@ -356,7 +355,7 @@ impl Store {
             atomic_write(&out, &bytes)?;
         }
         // merge imported snapshot into the CURRENT index, dedup by content hash (FR-B04)
-        let imported: PersistedIndex = rmp_serde::from_slice(&imported_bytes.unwrap())
+        let imported: PersistedIndex = rmp_serde::from_slice(&imported_bytes)
             .map_err(io::Error::other)?;
         let mut p = self.index.snapshot().clone();
         let mut id_map: std::collections::HashMap<u64, u64> = std::collections::HashMap::new();

@@ -6,7 +6,6 @@ use fastpaste_lib::monitor::{MonitorCmd, MonitorHandle};
 use fastpaste_lib::paste::Paster;
 use fastpaste_lib::store::Store;
 use parking_lot::Mutex;
-use std::sync::mpsc::channel;
 use std::sync::Arc;
 use tauri::{Emitter, Manager};
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
@@ -44,20 +43,21 @@ fn main() {
     let config = store.config.clone();
     let store = Arc::new(Mutex::new(store));
 
-    let MonitorHandle { cmd: monitor_cmd, events, manual_only } = MonitorHandle::new(store.clone(), config.paste_aware);
+    let MonitorHandle { cmd: monitor_cmd, manual_only } = MonitorHandle::new(store.clone(), config.paste_aware);
+    let events_rx = fastpaste_lib::monitor::take_events();
 
     let state = AppState {
         store,
         paster: Mutex::new(Paster::new()),
         log: Mutex::new(vec![]),
-        monitor: MonitorHandle { cmd: monitor_cmd.clone(), events: channel().1, manual_only },
+        monitor: MonitorHandle { cmd: monitor_cmd.clone(), manual_only },
     };
 
     tauri::Builder::default()
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .manage(state)
         .setup(move |app| {
-            commands::forward_events(app.handle().clone(), events);
+            commands::forward_events(app.handle().clone(), events_rx);
 
             // FR-B01: tray / menu-bar icon.
             let _tray = tauri::tray::TrayIconBuilder::new()

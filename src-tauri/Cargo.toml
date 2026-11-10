@@ -60,6 +60,7 @@ features = [
 default = []
 # OCR backends are opt-in to keep the default binary lean (NFR-P01).
 ocr-win = ["dep:windows"]
+ocr-mac = []
 
 [dev-dependencies]
 tempfile = "3"

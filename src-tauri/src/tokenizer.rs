@@ -14,7 +14,7 @@ pub fn tokenize(text: &str) -> Vec<String> {
     let mut word = String::new(); // current latin/digit word
     let mut han_run: Vec<char> = Vec::new();
 
-    let mut flush_han = |run: &mut Vec<char>, out: &mut Vec<String>| {
+    let flush_han = |run: &mut Vec<char>, out: &mut Vec<String>| {
         if run.is_empty() { return; }
         // unigrams
         for c in run.iter() { out.push(c.to_string()); }

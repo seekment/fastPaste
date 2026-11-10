@@ -4,8 +4,11 @@
 //! touch the clipboard directly.
 use crate::clipboard::{self, RawClip};
 use crate::models::*;
+use crate::store::RecordOutcome;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::{Mutex, OnceLock};
+use once_cell::sync::OnceCell;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -33,7 +36,6 @@ pub enum MonitorEvent {
 
 pub struct MonitorHandle {
     pub cmd: Sender<MonitorCmd>,
-    pub events: Receiver<MonitorEvent>,
     pub manual_only: Arc<AtomicBool>,
 }
 
@@ -89,6 +91,17 @@ fn make_thumbnail(bytes: &[u8]) -> Option<Vec<u8>> {
     Some(out.into_inner())
 }
 
+static EVENTS_RX: OnceLock<Mutex<Option<Receiver<MonitorEvent>>>> = OnceLock::new();
+
+/// The monitor event stream, handed to the Tauri event-forwarding thread.
+/// (Receiver is Send but not Sync, so it cannot live inside managed state.)
+pub fn take_events() -> Receiver<MonitorEvent> {
+    EVENTS_RX.get_or_init(|| Mutex::new(None))
+        .lock().unwrap()
+        .take()
+        .expect("events receiver taken twice")
+}
+
 impl MonitorHandle {
     pub fn new(store: Arc<parking_lot::Mutex<crate::store::Store>>,
                paste_aware: bool) -> Self {
@@ -102,7 +115,8 @@ impl MonitorHandle {
             .spawn(move || serial_loop(cmd_rx, ev_tx, store, paste_aware, manual_flag))
             .expect("spawn serial monitor");
 
-        Self { cmd: cmd_tx, events: ev_rx, manual_only }
+        *EVENTS_RX.get_or_init(|| Mutex::new(None)).lock().unwrap() = Some(ev_rx);
+        Self { cmd: cmd_tx, manual_only }
     }
 }
 
