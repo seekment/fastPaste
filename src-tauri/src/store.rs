@@ -329,7 +329,7 @@ impl Store {
                 }
             }
         }
-        zw.finish().map_err(io::Error::other)
+        zw.finish().map(|_| ()).map_err(io::Error::other)
     }
 
     pub fn import_archive(&mut self, zip_path: &Path) -> io::Result<usize> {

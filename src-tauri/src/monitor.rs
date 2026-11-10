@@ -8,7 +8,6 @@ use crate::store::RecordOutcome;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Mutex, OnceLock};
-use once_cell::sync::OnceCell;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 

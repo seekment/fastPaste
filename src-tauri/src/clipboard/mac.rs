@@ -4,7 +4,7 @@
 use super::RawClip;
 use objc::{class, msg_send, sel, sel_impl};
 use objc::runtime::Object;
-use objc_foundation::{INSArray, INSString, NSArray, NSObject, NSString};
+use objc_foundation::{INSString, NSArray, NSObject, NSString};
 use std::sync::mpsc::Sender;
 
 const POLL_MS: u64 = 500;
