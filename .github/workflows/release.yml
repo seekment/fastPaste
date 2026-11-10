@@ -1,7 +1,12 @@
 name: release
+
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:   # 允许手动触发
+
+permissions:
+  contents: write     # 允许创建 Release 和上传产物
 
 jobs:
   windows:
@@ -28,7 +33,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          args: --target universal-apple-darwin   # Intel + Apple Silicon 合一
+          args: --target universal-apple-darwin
           tagName: v__VERSION__
           releaseName: fastPaste v__VERSION__
           releaseDraft: true
