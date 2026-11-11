@@ -17,6 +17,7 @@ let state = {
   stackSel: [],     // paste-stack ordered selection (FR-A02)
   keepOpen: false,
   paused: false,
+  layout: 'strip',  // 'strip' = PasteMate bottom edge bar (default), 'overlay' = Paste grid wall
 };
 
 /* ---------------- rendering ---------------- */
@@ -108,6 +109,16 @@ function render() {
     content.innerHTML = '<div class="empty">暂无历史记录 — 复制任意内容后回到这里</div>';
     return;
   }
+  if (state.layout === 'strip') {
+    // PasteMate-style: ONE horizontal strip, newest first, wheel scrolls.
+    const row = document.createElement('div');
+    row.className = 'row';
+    row.style.paddingTop = '6px';
+    for (const c of state.cards) row.appendChild(cardEl(c));
+    content.appendChild(row);
+    return;
+  }
+  // overlay: Paste-style time-grouped card wall
   const pinned = state.cards.filter(c => c.pinned);
   const rest = state.cards.filter(c => !c.pinned);
   const sections = [];
@@ -214,6 +225,12 @@ document.addEventListener('contextmenu', (e) => {
       const c = state.cards.find(x => x.id === id);
       if (c && c.contentType === 'link') window.open(c.preview.trim(), '_blank');
     }],
+    ['合并为卡片（先 ⌘/Ctrl 多选）', async () => {
+      if (state.stackSel.length >= 2) {
+        await invoke('merge_items', { ids: state.stackSel });
+        state.stackSel = []; refresh(); toast('已合并为新卡片');
+      } else toast('先按住 ⌘/Ctrl 点击多选 2 条以上');
+    }],
     ['删除', async () => { await invoke('delete_item', { id }); refresh(); }],
   ];
   for (const [label, fn] of items) {
@@ -250,6 +267,13 @@ document.addEventListener('keydown', (e) => {
     if (sel) sel.scrollIntoView({ block: 'nearest', inline: 'nearest' });
     return;
   }
+  // PasteMate-style digit binding: 1-9 pastes the Nth visible card directly
+  // (only when the search box is empty, so digits still type while searching).
+  if (/^[1-9]$/.test(e.key) && !searchEl.value && document.activeElement === searchEl) {
+    const idx = Number(e.key) - 1;
+    if (state.cards[idx]) { e.preventDefault(); paste(state.cards[idx].id, false); }
+    return;
+  }
   if (e.key === 'Enter' && state.cursor >= 0) {
     e.preventDefault();
     const c = state.cards[state.cursor];
@@ -271,7 +295,7 @@ async function openSettings() {
   $('#cfg-keepopen').checked = cfg.pasteKeepOpen;
   $('#cfg-pause').checked = cfg.pauseRecording;
   $('#cfg-aware').checked = cfg.pasteAware;
-  $('#cfg-layout').value = cfg.panelLayout || 'overlay';
+  $('#cfg-layout').value = (cfg.panelLayout === 'overlay') ? 'overlay' : 'strip';
   $('#cfg-encrypt').checked = !!cfg.encrypt;
   $('#cfg-autolaunch').checked = !!cfg.autoLaunch;
   state.keepOpen = cfg.pasteKeepOpen;
@@ -309,6 +333,7 @@ async function saveSettings() {
   cfg.pasteKeepOpen = $('#cfg-keepopen').checked;
   cfg.pasteAware = $('#cfg-aware').checked;
   cfg.panelLayout = $('#cfg-layout').value;
+  state.layout = cfg.panelLayout;
   cfg.encrypt = $('#cfg-encrypt').checked;
   cfg.autoLaunch = $('#cfg-autolaunch').checked;
   await invoke('set_config', { cfg });
@@ -353,6 +378,7 @@ $('#cfg-clear').addEventListener('click', async () => {
 (async () => {
   const cfg = await invoke('get_config');
   state.keepOpen = cfg.pasteKeepOpen;
+  state.layout = (cfg.panelLayout === 'overlay') ? 'overlay' : 'strip';
   searchEl.focus();
   refresh();
 })();

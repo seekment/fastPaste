@@ -127,7 +127,7 @@ fn main() {
             commands::add_exclude, commands::remove_exclude, commands::clear_all,
             commands::export_archive, commands::import_archive, commands::diagnostics,
             commands::item_text, commands::paste_item, commands::paste_stack, commands::copy_item,
-            commands::set_auto_launch, commands::update_hotkey,
+            commands::set_auto_launch, commands::update_hotkey, commands::merge_items,
         ])
         .run(tauri::generate_context!())
         .expect("error while running fastPaste");

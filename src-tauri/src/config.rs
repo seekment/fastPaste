@@ -30,7 +30,7 @@ impl Default for Config {
             max_disk_bytes: Some(2 * 1024 * 1024 * 1024), // 2 GB default cap
             excluded_apps: vec![],
             pause_recording: false,
-            panel_layout: "overlay".into(),
+            panel_layout: "strip".into(),
             paste_keep_open: false,
             encrypt: false,
             paste_aware: cfg!(target_os = "macos"),

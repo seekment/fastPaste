@@ -308,17 +308,18 @@ pub fn show_panel_cmd(app: &tauri::AppHandle) {
         } else {
             "overlay".to_string()
         };
-        if layout == "compact" {
-            // small dock-style card window at the right edge
-            let _ = w.set_size(tauri::LogicalSize { width: 400.0, height: 560.0 });
+        if layout == "strip" || layout == "compact" {
+            // PasteMate-style bottom edge card strip (FR-K06 alt layout)
+            let _ = w.set_size(tauri::LogicalSize { width: 1000.0, height: 220.0 });
             if let Ok(Some(m)) = app.primary_monitor() {
                 let pos = tauri::PhysicalPosition {
-                    x: (m.size().width as i32) - 420,
-                    y: (m.size().height as i32 - 600) / 2,
+                    x: ((m.size().width as i32) - 1000) / 2,
+                    y: (m.size().height as i32) - 250,
                 };
                 let _ = w.set_position(pos);
             }
         } else {
+            // centered overlay card wall (Paste-style, FR-K06)
             let _ = w.set_size(tauri::LogicalSize { width: 980.0, height: 620.0 });
             let _ = w.center();
         }
@@ -368,4 +369,32 @@ pub fn update_hotkey(app: tauri::AppHandle, state: State<'_, AppState>, hotkey: 
     let p = st.dir.join("config.json");
     st.config.save(&p).map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// PasteMate-style "merge copies into one card": combine several text entries
+/// into a single new history card, joined with newlines.
+#[tauri::command]
+pub fn merge_items(state: State<'_, AppState>, ids: Vec<u64>) -> Result<u64, String> {
+    let mut parts: Vec<String> = Vec::new();
+    {
+        let st = state.store.lock();
+        for &id in &ids {
+            let payload = st.read_payload(id).map_err(|e| e.to_string())?;
+            let meta = st.index.get(id).ok_or("no such item")?.clone();
+            let part = match meta.content_type {
+                ContentType::Files => payload.files.map(|f| f.join("\n")).unwrap_or_default(),
+                _ => payload.text.clone()
+                    .or_else(|| payload.html.as_ref().map(|h| html_to_text(h)))
+                    .unwrap_or_default(),
+            };
+            if !part.is_empty() { parts.push(part); }
+        }
+    }
+    if parts.is_empty() { return Err("nothing to merge".into()); }
+    let clip = IncomingClip::text(&parts.join("\n"), "fastPaste");
+    let mut st = state.store.lock();
+    match st.record(clip).map_err(|e| e.to_string())? {
+        crate::store::RecordOutcome::New(id) | crate::store::RecordOutcome::Duplicate(id) => Ok(id),
+        _ => Err("merge blocked by privacy rules".into()),
+    }
 }
