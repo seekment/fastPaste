@@ -19,12 +19,13 @@
     height: 100%; overflow: hidden;
     font-family: -apple-system, "SF Pro Text", "PingFang SC", "Segoe UI", "Microsoft YaHei", sans-serif;
     color: var(--fg);
-    background: transparent;
+    background: #101014;   /* solid shell: transparent windows render black on some Windows GPUs */
     user-select: none;
   }
   body { display: flex; align-items: center; justify-content: center; }
   #panel {
     width: 940px; max-width: 96vw; height: 600px; max-height: 92vh;
+    margin: 12px;
     background: var(--bg);
     backdrop-filter: blur(28px) saturate(1.4);
     -webkit-backdrop-filter: blur(28px) saturate(1.4);
@@ -115,8 +116,15 @@
 
   /* ---------- settings ---------- */
   #settings {
-    position: absolute; inset: 0; background: var(--bg); border-radius: var(--radius);
-    backdrop-filter: blur(28px); display: none; flex-direction: column; padding: 18px 22px;
+    position: absolute; inset: 12px; background: #20202a; border-radius: var(--radius);
+    display: none; flex-direction: column; padding: 18px 22px; overflow-y: auto;
+  }
+  #settings::-webkit-scrollbar { width: 6px; }
+  #settings::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 3px; }
+  #logbox {
+    display: none; margin-top: 10px; background: rgba(0,0,0,0.4); border-radius: 8px;
+    padding: 8px 10px; font-size: 11px; color: var(--fg-dim); max-height: 160px;
+    overflow-y: auto; white-space: pre-wrap; user-select: text;
   }
   #settings.open { display: flex; }
   #settings h2 { font-size: 15px; margin-bottom: 12px; }
@@ -157,7 +165,9 @@
 
   <div id="settings">
     <h2>设置</h2>
-    <div class="srow"><span>全局热键</span><input type="text" id="cfg-hotkey" /></div>
+    <div class="srow"><span>全局热键（如 Control+Shift+V / Command+Shift+V）</span>
+      <span style="display:flex;gap:6px"><input type="text" id="cfg-hotkey" style="width:180px" /><button class="btn" id="cfg-savehotkey">应用</button></span>
+    </div>
     <div class="srow"><span>历史保留天数（留空为无限）</span><input type="text" id="cfg-days" /></div>
     <div class="srow"><span>磁盘上限（MB，留空为 2048）</span><input type="text" id="cfg-maxmb" /></div>
     <div class="srow"><span>粘贴后保留面板（连续粘贴）</span><input type="checkbox" id="cfg-keepopen" /></div>
@@ -168,12 +178,20 @@
       <span style="display:flex;gap:6px"><input type="text" id="cfg-excl" placeholder="应用名或路径" style="width:160px" /><button class="btn" id="cfg-addexcl">添加</button></span>
     </div>
     <div class="srow"><span></span><span class="chiprow" id="excludesettings"></span></div>
+    <div class="srow"><span>开机自启（登录后静默启动，不弹面板）</span><input type="checkbox" id="cfg-autolaunch" /></div>
+    <div class="srow"><span>面板布局</span><select id="cfg-layout">
+      <option value="overlay">居中覆盖层（类似 Spotlight）</option>
+      <option value="compact">右侧紧凑小窗（小粘贴卡片）</option>
+    </select></div>
+    <div class="srow"><span>本地加密（AES-256-GCM，内容文件加密存储）</span><input type="checkbox" id="cfg-encrypt" /></div>
+    <div class="srow"><span>诊断日志（不含剪贴板内容）</span><button class="btn" id="cfg-logs">查看</button></div>
     <div class="srow"><span>数据</span><span style="display:flex;gap:6px">
       <button class="btn" id="cfg-export">导出备份</button>
       <button class="btn" id="cfg-import">导入备份</button>
       <button class="btn danger" id="cfg-clear">清空全部历史</button>
     </span></div>
     <div class="srow"><span></span><button class="btn" id="cfg-close">返回</button></div>
+    <div id="logbox"></div>
   </div>
 </div>
 <script src="tokenizer.js"></script>

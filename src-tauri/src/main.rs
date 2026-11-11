@@ -1,15 +1,16 @@
-#![cfg(feature = "app")]
-
 //! fastPaste entry point: single instance, tray, global hotkey, panel window.
-//! V2.0 constraints honored here: no DB process, no bundled Chromium,
-//! no non-user-initiated network.
+//! Close button / X hides the panel to tray (QQ-style); only tray menu 退出
+//! actually quits the app. V2.0 constraints: no DB process, no bundled
+//! Chromium, no non-user-initiated network.
+#![cfg(feature = "app")]
 use fastpaste_lib::commands::{self, AppState};
 use fastpaste_lib::monitor::{MonitorCmd, MonitorHandle};
 use fastpaste_lib::store::Store;
 use parking_lot::Mutex;
 use std::sync::Arc;
-use tauri::{Emitter, Manager};
-use tauri_plugin_global_shortcut::GlobalShortcutExt;
+use tauri::{Emitter, Manager, WindowEvent};
+use tauri_plugin_autostart::ManagerExt;
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
 fn data_dir() -> std::path::PathBuf {
     #[cfg(target_os = "macos")]
@@ -19,15 +20,6 @@ fn data_dir() -> std::path::PathBuf {
     let base = std::env::var_os("APPDATA").map(std::path::PathBuf::from)
         .unwrap_or_else(|| std::path::PathBuf::from("."));
     base.join("fastPaste")
-}
-
-fn show_panel(app: &tauri::AppHandle) {
-    if let Some(w) = app.get_webview_window("panel") {
-        let _ = w.center();
-        let _ = w.show();
-        let _ = w.set_focus();
-        let _ = w.emit("panel-shown", ());
-    }
 }
 
 fn main() {
@@ -54,13 +46,30 @@ fn main() {
     };
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_autostart::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .manage(state)
         .setup(move |app| {
             commands::forward_events(app.handle().clone(), events_rx);
 
+            // QQ-style close: the X button hides the panel instead of quitting.
+            // Only the tray menu 退出 terminates the app.
+            if let Some(panel) = app.get_webview_window("panel") {
+                let panel_clone = panel.clone();
+                panel.on_window_event(move |event| {
+                    if let WindowEvent::CloseRequested { api, .. } = event {
+                        api.prevent_close();
+                        let _ = panel_clone.hide();
+                    }
+                });
+            }
+
+            // FR-B02: honor auto-launch setting at startup.
+            if config.auto_launch {
+                let _ = app.auto_launch().enable();
+            }
+
             // FR-B01: tray / menu-bar icon.
-            // MenuBuilder::items() returns &mut Self (not Result) in tauri 2 - only build() ?'s.
             let open = tauri::menu::MenuItem::with_id(app, "open", "打开面板", true, None::<&str>)?;
             let pause = tauri::menu::MenuItem::with_id(app, "pause", "暂停记录", true, None::<&str>)?;
             let settings = tauri::menu::MenuItem::with_id(app, "settings", "设置…", true, None::<&str>)?;
@@ -73,14 +82,14 @@ fn main() {
                 .icon(app.default_window_icon().unwrap().clone())
                 .on_tray_icon_event(|tray, event| {
                     if let tauri::tray::TrayIconEvent::Click { button: tauri::tray::MouseButton::Left, .. } = event {
-                        show_panel(tray.app_handle());
+                        commands::show_panel_cmd(tray.app_handle());
                     }
                 })
                 .menu(&menu)
                 .on_menu_event(|app, event| match event.id().as_ref() {
-                    "open" => show_panel(app),
+                    "open" => commands::show_panel_cmd(app),
                     "settings" => {
-                        show_panel(app);
+                        commands::show_panel_cmd(app);
                         let _ = app.emit_to("panel", "open-settings", ());
                     }
                     "pause" => {
@@ -93,6 +102,7 @@ fn main() {
                         }
                     }
                     "quit" => {
+                        // The ONLY exit path: right-click tray -> 退出 (QQ-style).
                         if let Some(st) = app.try_state::<AppState>() {
                             let _ = st.monitor.cmd.send(MonitorCmd::Shutdown);
                             st.store.lock().compact().ok();
@@ -104,17 +114,9 @@ fn main() {
                 .build(app)?;
 
             // FR-K01: global hotkey; conflict -> refuse registration & log.
-            // on_shortcut accepts a pre-parsed Shortcut (String TryInto is not
-            // implemented for the plugin's ShortcutWrapper).
-            let hk: tauri_plugin_global_shortcut::Shortcut = config.hotkey.parse()
-                .unwrap_or_else(|_| panic!("invalid hotkey: {}", config.hotkey));
-            app.global_shortcut().on_shortcut(hk, |app, _shortcut, event| {
-                if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
-                    show_panel(app);
-                }
-            }).unwrap_or_else(|e| {
+            if let Err(e) = commands::register_hotkey(app.handle(), &config.hotkey) {
                 eprintln!("hotkey registration failed (conflict?): {}", e);
-            });
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -123,6 +125,7 @@ fn main() {
             commands::add_exclude, commands::remove_exclude, commands::clear_all,
             commands::export_archive, commands::import_archive, commands::diagnostics,
             commands::item_text, commands::paste_item, commands::paste_stack, commands::copy_item,
+            commands::set_auto_launch, commands::update_hotkey,
         ])
         .run(tauri::generate_context!())
         .expect("error while running fastPaste");

@@ -1,6 +1,6 @@
 [package]
 name = "fastpaste"
-version = "0.2.0"
+version = "0.3.0"
 description = "fastPaste - small & stable cross-platform clipboard manager (no external DB)"
 edition = "2021"
 
@@ -23,10 +23,13 @@ once_cell = "1"
 parking_lot = "0.12"
 tauri = { version = "2", features = ["tray-icon", "image-png"], optional = true }
 tauri-plugin-global-shortcut = { version = "2", optional = true }
+tauri-plugin-autostart = { version = "2", optional = true }
 enigo = "0.2"
 image = "0.25"
 regex-lite = "0.1"
 zip = { version = "1", default-features = false, features = ["deflate"] }
+aes-gcm = "0.10"
+rand = "0.8"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = [
@@ -58,7 +61,7 @@ features = [
 
 [features]
 default = ["app"]
-app = ["dep:tauri", "dep:tauri-plugin-global-shortcut"]
+app = ["dep:tauri", "dep:tauri-plugin-global-shortcut", "dep:tauri-plugin-autostart"]
 # OCR backends are opt-in to keep the default binary lean (NFR-P01).
 ocr-win = ["dep:windows"]
 ocr-mac = []

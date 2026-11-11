@@ -5,7 +5,6 @@ use crate::monitor::{MonitorCmd, MonitorHandle, MonitorEvent};
 use crate::store::Store;
 use parking_lot::Mutex;
 use serde::Serialize;
-use std::sync::Arc;
 use std::sync::mpsc::channel;
 use tauri::{Emitter, Manager, State};
 
@@ -296,4 +295,76 @@ pub fn forward_events(app: tauri::AppHandle, events: std::sync::mpsc::Receiver<M
             }
         }
     });
+}
+
+// ---------------- shared panel / hotkey helpers (used by main.rs too) ----------------
+
+/// Show the panel honoring the configured layout (FR-K06).
+pub fn show_panel_cmd(app: &tauri::AppHandle) {
+    if let Some(w) = app.get_webview_window("panel") {
+        let layout = if let Some(st) = app.try_state::<AppState>() {
+            st.store.lock().config.panel_layout.clone()
+        } else {
+            "overlay".to_string()
+        };
+        if layout == "compact" {
+            // small dock-style card window at the right edge
+            let _ = w.set_size(tauri::LogicalSize { width: 400.0, height: 560.0 });
+            if let Ok(Some(m)) = app.primary_monitor() {
+                let pos = tauri::PhysicalPosition {
+                    x: (m.size().width as i32) - 420,
+                    y: (m.size().height as i32 - 600) / 2,
+                };
+                let _ = w.set_position(pos);
+            }
+        } else {
+            let _ = w.set_size(tauri::LogicalSize { width: 980.0, height: 620.0 });
+            let _ = w.center();
+        }
+        let _ = w.show();
+        let _ = w.set_focus();
+        let _ = app.emit_to("panel", "panel-shown", ());
+    }
+}
+
+/// FR-K01: (re)register the global hotkey. Used at startup and from settings.
+pub fn register_hotkey(app: &tauri::AppHandle, hotkey_str: &str) -> Result<(), String> {
+    use tauri_plugin_global_shortcut::GlobalShortcutExt;
+    let hk: tauri_plugin_global_shortcut::Shortcut = hotkey_str.parse()
+        .map_err(|_| format!("invalid hotkey: {}", hotkey_str))?;
+    app.global_shortcut().on_shortcut(hk, hotkey_handler)
+        .map_err(|e| format!("hotkey registration failed: {}", e))
+}
+
+fn hotkey_handler(app: &tauri::AppHandle, _s: &tauri_plugin_global_shortcut::Shortcut,
+                  event: tauri_plugin_global_shortcut::ShortcutEvent) {
+    use tauri_plugin_global_shortcut::ShortcutState;
+    if event.state == ShortcutState::Pressed {
+        show_panel_cmd(app);
+    }
+}
+
+/// FR-B02: toggle launch-on-login (FR-B02, requires tauri-plugin-autostart).
+#[tauri::command]
+pub fn set_auto_launch(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
+    use tauri_plugin_autostart::ManagerExt;
+    let al = app.auto_launch();
+    if enabled { al.enable() } else { al.disable() }
+        .map_err(|e| format!("auto-launch failed: {}", e))
+}
+
+/// FR-B03: change the global hotkey at runtime (no restart needed).
+#[tauri::command]
+pub fn update_hotkey(app: tauri::AppHandle, state: State<'_, AppState>, hotkey: String) -> Result<(), String> {
+    use tauri_plugin_global_shortcut::GlobalShortcutExt;
+    let old_str = state.store.lock().config.hotkey.clone();
+    let old: tauri_plugin_global_shortcut::Shortcut = old_str.parse()
+        .map_err(|_| format!("old hotkey invalid: {}", old_str))?;
+    let _ = app.global_shortcut().unregister(old);
+    register_hotkey(&app, &hotkey)?;
+    let mut st = state.store.lock();
+    st.config.hotkey = hotkey;
+    let p = st.dir.join("config.json");
+    st.config.save(&p).map_err(|e| e.to_string())?;
+    Ok(())
 }

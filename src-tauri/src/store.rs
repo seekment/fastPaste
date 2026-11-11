@@ -12,6 +12,8 @@
 use crate::config::Config;
 use crate::index::{AddOutcome, PersistedIndex, SearchIndex};
 use crate::models::*;
+use aes_gcm::aead::{Aead, KeyInit};
+use aes_gcm::{Aes256Gcm, Nonce};
 use serde::{Deserialize, Serialize};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufWriter, Read, Write};
@@ -60,10 +62,18 @@ impl Store {
         }
         let config = Config::load(&dir.join("config.json"));
 
-        // 1) load snapshot
+        // 1) load snapshot (decrypt first when sealed with FR-P06 encryption)
         let mut index = match fs::read(dir.join("index.bin")) {
             Ok(bytes) => {
-                rmp_serde::from_slice::<PersistedIndex>(&bytes)
+                let plain = if bytes.starts_with(ENC_MAGIC) {
+                    match load_cipher(dir, &config)? {
+                        Some(c) => unseal(&c, &bytes[4..]).unwrap_or_default(),
+                        None => Vec::new(),
+                    }
+                } else {
+                    bytes
+                };
+                rmp_serde::from_slice::<PersistedIndex>(&plain)
                     .map(SearchIndex::from_persisted)
                     .unwrap_or_else(|_| SearchIndex::new())
             }
@@ -220,10 +230,19 @@ impl Store {
         let ct = ContentType::from_u8(cur[0]).ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "bad type"))?;
         cur = &cur[1..];
         let mlen = u32::from_le_bytes(cur[..4].try_into().unwrap()) as usize;
+        let meta: serde_json::Value = serde_json::from_slice(&cur[4..4 + mlen]).unwrap_or_default();
         cur = &cur[4 + mlen..];
         let plen = u64::from_le_bytes(cur[..8].try_into().unwrap()) as usize;
         cur = &cur[8..];
-        let payload: ClipPayload = rmp_serde::from_slice(&cur[..plen]).map_err(io::Error::other)?;
+        let body: Vec<u8> = if meta.get("enc").and_then(|v| v.as_bool()).unwrap_or(false) {
+            match load_cipher(&self.dir, &self.config)? {
+                Some(c) => unseal(&c, &cur[..plen])?,
+                None => return Err(io::Error::new(io::ErrorKind::Other, "encrypted item but encryption disabled")),
+            }
+        } else {
+            cur[..plen].to_vec()
+        };
+        let payload: ClipPayload = rmp_serde::from_slice(&body).map_err(io::Error::other)?;
         let _ = ct;
         Ok(payload)
     }
@@ -304,7 +323,14 @@ impl Store {
     /// Merge WAL into index.bin, truncate WAL (called on clean shutdown).
     pub fn compact(&mut self) -> io::Result<()> {
         self.wal.flush()?;
-        let snap = rmp_serde::to_vec(self.index.snapshot()).map_err(io::Error::other)?;
+        let mut snap = rmp_serde::to_vec(self.index.snapshot()).map_err(io::Error::other)?;
+        if self.config.encrypt {
+            if let Some(c) = load_cipher(&self.dir, &self.config)? {
+                let mut sealed = ENC_MAGIC.to_vec();
+                sealed.extend_from_slice(&seal(&c, &snap)?);
+                snap = sealed;
+            }
+        }
         atomic_write(&self.dir.join("index.bin"), &snap)?;
         let wal_path = self.dir.join("index.wal");
         fs::remove_file(&wal_path).ok();
@@ -387,6 +413,38 @@ impl Store {
 
     // accessor used by WAL replay path
     pub fn snapshot_mut(&mut self) -> &mut PersistedIndex { self.index.snapshot_mut() }
+}
+
+// ---------- FR-P06: AES-256-GCM local encryption (content + snapshot) ----------
+const ENC_MAGIC: &[u8; 4] = b"FENC";
+
+fn load_cipher(dir: &Path, cfg: &Config) -> io::Result<Option<Aes256Gcm>> {
+    if !cfg.encrypt { return Ok(None); }
+    let key_path = dir.join("key.bin");
+    let key: [u8; 32] = match fs::read(&key_path) {
+        Ok(k) if k.len() == 32 => k.try_into().unwrap(),
+        _ => {
+            let k: [u8; 32] = rand::random();
+            fs::write(&key_path, &k)?;
+            k
+        }
+    };
+    Aes256Gcm::new_from_slice(&key).map(Some).map_err(io::Error::other)
+}
+
+fn seal(cipher: &Aes256Gcm, data: &[u8]) -> io::Result<Vec<u8>> {
+    let nonce_bytes: [u8; 12] = rand::random();
+    let nonce = Nonce::from_slice(&nonce_bytes);
+    let ct = cipher.encrypt(nonce, data).map_err(|_| io::Error::new(io::ErrorKind::Other, "seal failed"))?;
+    let mut out = nonce_bytes.to_vec();
+    out.extend_from_slice(&ct);
+    Ok(out)
+}
+
+fn unseal(cipher: &Aes256Gcm, data: &[u8]) -> io::Result<Vec<u8>> {
+    if data.len() < 12 { return Err(io::Error::new(io::ErrorKind::InvalidData, "short sealed data")); }
+    let (n, ct) = data.split_at(12);
+    cipher.decrypt(Nonce::from_slice(n), ct).map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "decrypt failed"))
 }
 
 /// tmp -> fsync -> rename (NFR-R02).

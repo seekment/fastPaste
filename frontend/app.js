@@ -271,7 +271,11 @@ async function openSettings() {
   $('#cfg-keepopen').checked = cfg.pasteKeepOpen;
   $('#cfg-pause').checked = cfg.pauseRecording;
   $('#cfg-aware').checked = cfg.pasteAware;
+  $('#cfg-layout').value = cfg.panelLayout || 'overlay';
+  $('#cfg-encrypt').checked = !!cfg.encrypt;
+  $('#cfg-autolaunch').checked = !!cfg.autoLaunch;
   state.keepOpen = cfg.pasteKeepOpen;
+  $('#logbox').style.display = 'none';
   renderExcludes(cfg.excludedApps);
   $('#settings').classList.add('open');
 }
@@ -300,17 +304,38 @@ $('#cfg-addexcl').addEventListener('click', async () => {
 });
 async function saveSettings() {
   const cfg = await invoke('get_config');
-  cfg.hotkey = $('#cfg-hotkey').value.trim() || cfg.hotkey;
   cfg.retentionDays = $('#cfg-days').value ? Number($('#cfg-days').value) : null;
   cfg.maxDiskBytes = $('#cfg-maxmb').value ? Number($('#cfg-maxmb').value) * 1048576 : null;
   cfg.pasteKeepOpen = $('#cfg-keepopen').checked;
   cfg.pasteAware = $('#cfg-aware').checked;
+  cfg.panelLayout = $('#cfg-layout').value;
+  cfg.encrypt = $('#cfg-encrypt').checked;
+  cfg.autoLaunch = $('#cfg-autolaunch').checked;
   await invoke('set_config', { cfg });
   await invoke('pause_recording', { pause: $('#cfg-pause').checked });
+  await invoke('set_auto_launch', { enabled: cfg.autoLaunch });
   state.keepOpen = cfg.pasteKeepOpen;
-  toast('设置已保存');
+  toast('设置已保存（热键修改请点右侧"应用"按钮）');
 }
-['cfg-hotkey', 'cfg-days', 'cfg-maxmb', 'cfg-keepopen', 'cfg-aware', 'cfg-pause']
+
+// FR-B03: apply hotkey change without restart
+$('#cfg-savehotkey')?.addEventListener('click', async () => {
+  const v = $('#cfg-hotkey').value.trim();
+  if (!v) return;
+  try { await invoke('update_hotkey', { hotkey: v }); toast('热键已生效：' + v); }
+  catch (e) { toast('热键设置失败：' + e); }
+});
+
+// FR-B06: diagnostics viewer (logs never contain clipboard content, NFR-S02)
+$('#cfg-logs')?.addEventListener('click', async () => {
+  const box = $('#logbox');
+  if (box.style.display === 'block') { box.style.display = 'none'; return; }
+  const lines = await invoke('diagnostics');
+  box.textContent = lines.slice(-100).join('\n') || '（暂无日志）';
+  box.style.display = 'block';
+});
+// hotkey uses its own 应用 button (needs re-registration, not a config save)
+['cfg-days', 'cfg-maxmb', 'cfg-keepopen', 'cfg-aware', 'cfg-pause', 'cfg-layout', 'cfg-encrypt', 'cfg-autolaunch']
   .forEach(id => $('#' + id).addEventListener('change', saveSettings));
 $('#cfg-export').addEventListener('click', async () => {
   const p = await window.__TAURI__.dialog.save({ defaultPath: 'fastpaste-backup.zip' });
