@@ -315,7 +315,8 @@ impl Store {
     // ---------- export / import (FR-B04) ----------
     pub fn export_archive(&self, zip_path: &Path) -> io::Result<()> {
         let mut zw = zip::ZipWriter::new(File::create(zip_path)?);
-        let opts = zip::write::FileOptions::default()
+        // 改后
+        let opts = zip::write::SimpleFileOptions::default()
             .compression_method(zip::CompressionMethod::Deflated);
         let snap = rmp_serde::to_vec(self.index.snapshot()).map_err(io::Error::other)?;
         zw.start_file("index.bin", opts)?;
