@@ -35,6 +35,7 @@ pub struct CardDto {
     pub preview: String,
     pub text_length: usize,
     pub thumb: Option<String>, // base64 PNG data URL
+    pub bound_key: Option<String>,
 }
 
 fn to_dto(st: &Store, meta: &ClipMeta) -> CardDto {
@@ -52,6 +53,7 @@ fn to_dto(st: &Store, meta: &ClipMeta) -> CardDto {
         preview: meta.preview.clone(),
         text_length: meta.text_length,
         thumb,
+        bound_key: meta.bound_key.clone(),
     }
 }
 
@@ -179,6 +181,12 @@ pub fn item_text(state: State<'_, AppState>, id: u64) -> Result<String, String> 
 /// panel hiding and keystroke injection happen afterwards.
 #[tauri::command]
 pub fn paste_item(app: tauri::AppHandle, state: State<'_, AppState>, id: u64, plain: bool, keep_open: bool) -> Result<(), String> {
+    do_paste(&app, &state, id, plain, keep_open)
+}
+
+/// Internal paste implementation - shared by the paste command AND the
+/// PasteMate-style bound-key global shortcuts (paste without opening the panel).
+pub fn do_paste(app: &tauri::AppHandle, state: &AppState, id: u64, plain: bool, keep_open: bool) -> Result<(), String> {
     let (text, html) = {
         let st = state.store.lock();
         let payload = st.read_payload(id).map_err(|e| e.to_string())?;
@@ -215,7 +223,12 @@ pub fn paste_item(app: tauri::AppHandle, state: State<'_, AppState>, id: u64, pl
         return Err("clipboard write failed".into());
     }
 
-    if !keep_open {
+    // PasteMate-style dock: a locked bottom strip never auto-hides.
+    let docked = {
+        let st = state.store.lock();
+        st.config.panel_layout != "overlay" && st.config.dock_locked
+    };
+    if !keep_open && !docked {
         if let Some(w) = app.get_webview_window("panel") {
             let _ = w.hide();
         }
@@ -310,11 +323,11 @@ pub fn show_panel_cmd(app: &tauri::AppHandle) {
         };
         if layout == "strip" || layout == "compact" {
             // PasteMate-style bottom edge card strip (FR-K06 alt layout)
-            let _ = w.set_size(tauri::LogicalSize { width: 1000.0, height: 220.0 });
+            let _ = w.set_size(tauri::LogicalSize { width: 1000.0, height: 240.0 });
             if let Ok(Some(m)) = app.primary_monitor() {
                 let pos = tauri::PhysicalPosition {
                     x: ((m.size().width as i32) - 1000) / 2,
-                    y: (m.size().height as i32) - 250,
+                    y: (m.size().height as i32) - 270,
                 };
                 let _ = w.set_position(pos);
             }
@@ -397,4 +410,114 @@ pub fn merge_items(state: State<'_, AppState>, ids: Vec<u64>) -> Result<u64, Str
         crate::store::RecordOutcome::New(id) | crate::store::RecordOutcome::Duplicate(id) => Ok(id),
         _ => Err("merge blocked by privacy rules".into()),
     }
+}
+
+// ---------------- PasteMate-style features ----------------
+
+/// Key binding: press the bound key anywhere -> this card pastes directly
+/// (no panel). key=None unbinds. Registered as a GLOBAL shortcut, so users
+/// should bind keys they don't need while typing (digits, F-keys...).
+#[tauri::command]
+pub fn set_bound_key(app: tauri::AppHandle, state: State<'_, AppState>, id: u64, key: Option<String>) -> Result<(), String> {
+    use tauri_plugin_global_shortcut::GlobalShortcutExt;
+    // unregister previous binding for this card
+    let old = state.store.lock().index.get(id).and_then(|m| m.bound_key.clone());
+    if let Some(k) = old {
+        if let Ok(sc) = k.parse::<tauri_plugin_global_shortcut::Shortcut>() {
+            let _ = app.global_shortcut().unregister(sc);
+        }
+    }
+    if let Some(k) = &key {
+        let sc: tauri_plugin_global_shortcut::Shortcut = k.parse()
+            .map_err(|_| format!("无法绑定的按键：{}（试试 1-9 或 F1-F12）", k))?;
+        app.global_shortcut().on_shortcut(sc, move |app, _s, event| {
+            if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
+                if let Some(st) = app.try_state::<AppState>() {
+                    let _ = do_paste(app, &st, id, false, false);
+                }
+            }
+        }).map_err(|e| format!("绑定失败（可能被其他程序占用）: {}", e))?;
+    }
+    state.store.lock().set_bound_key(id, key).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Re-register all bound keys at startup (bindings survive restarts).
+pub fn register_bound_keys(app: &tauri::AppHandle) {
+    use tauri_plugin_global_shortcut::GlobalShortcutExt;
+    let items: Vec<(u64, String)> = {
+        let st = app.state::<AppState>();
+        let store = st.store.lock();
+        store.index.snapshot().items.values()
+            .filter_map(|m| m.bound_key.clone().map(|k| (m.id, k)))
+            .collect()
+    };
+    for (id, key) in items {
+        if let Ok(sc) = key.parse::<tauri_plugin_global_shortcut::Shortcut>() {
+            let _ = app.global_shortcut().on_shortcut(sc, move |app, _s, event| {
+                if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
+                    if let Some(st) = app.try_state::<AppState>() {
+                        let _ = do_paste(app, &st, id, false, false);
+                    }
+                }
+            });
+        }
+    }
+}
+
+/// Edit a card's text content in place (PasteMate-style).
+#[tauri::command]
+pub fn update_item_text(state: State<'_, AppState>, id: u64, text: String) -> Result<(), String> {
+    state.store.lock().edit_text(id, &text).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Multi-delete (PasteMate-style batch ops).
+#[tauri::command]
+pub fn delete_items(state: State<'_, AppState>, ids: Vec<u64>) -> Result<usize, String> {
+    let mut n = 0;
+    for id in ids {
+        if state.store.lock().delete(id).map_err(|e| e.to_string())? { n += 1; }
+    }
+    Ok(n)
+}
+
+/// Insert an empty card (memo).
+#[tauri::command]
+pub fn create_note(state: State<'_, AppState>) -> Result<u64, String> {
+    match state.store.lock().create_note().map_err(|e| e.to_string())? {
+        crate::store::RecordOutcome::New(id) | crate::store::RecordOutcome::Duplicate(id) => Ok(id),
+        _ => Err("blocked by privacy rules".into()),
+    }
+}
+
+/// Persist drag-to-order arrangement (strip layout).
+#[tauri::command]
+pub fn set_card_order(state: State<'_, AppState>, ids: Vec<u64>) -> Result<(), String> {
+    let mut st = state.store.lock();
+    st.config.card_order = ids;
+    let p = st.dir.join("config.json");
+    st.config.save(&p).map_err(|e| e.to_string())
+}
+
+/// PasteMate-style click-to-preview: expand the bottom strip to make room
+/// for a preview pane above the card row. Esc / collapse shrinks it back.
+#[tauri::command]
+pub fn set_panel_expanded(app: tauri::AppHandle, expanded: bool) -> Result<(), String> {
+    if let Some(w) = app.get_webview_window("panel") {
+        let layout = if let Some(st) = app.try_state::<AppState>() {
+            st.store.lock().config.panel_layout.clone()
+        } else { "overlay".into() };
+        if layout == "strip" || layout == "compact" {
+            let h = if expanded { 440.0 } else { 240.0 };
+            let _ = w.set_size(tauri::LogicalSize { width: 1000.0, height: h });
+            if let Ok(Some(m)) = app.primary_monitor() {
+                let _ = w.set_position(tauri::PhysicalPosition {
+                    x: ((m.size().width as i32) - 1000) / 2,
+                    y: (m.size().height as i32) - (h as i32) - 30,
+                });
+            }
+        }
+    }
+    Ok(())
 }

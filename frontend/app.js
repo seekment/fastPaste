@@ -18,6 +18,10 @@ let state = {
   keepOpen: false,
   paused: false,
   layout: 'strip',  // 'strip' = PasteMate bottom edge bar (default), 'overlay' = Paste grid wall
+  theme: 'light',
+  cardSize: 'medium',
+  cardOrder: [],
+  dockLocked: false,
 };
 
 /* ---------------- rendering ---------------- */
@@ -71,6 +75,31 @@ function cardEl(c) {
     b.className = 'badge'; b.textContent = '★';
     el.appendChild(b);
   }
+  if (c.boundKey) {
+    const k = document.createElement('div');
+    k.className = 'keybind'; k.textContent = c.boundKey;
+    el.appendChild(k);
+  }
+  // PasteMate-style drag to reorder (strip layout)
+  if (state.layout === 'strip' && !state.query.trim()) {
+    el.draggable = true;
+    el.addEventListener('dragstart', () => { el.classList.add('dragging'); });
+    el.addEventListener('dragend', async () => {
+      el.classList.remove('dragging');
+      const ids = [...content.querySelectorAll('.card')].map(x => Number(x.dataset.id));
+      state.cardOrder = ids;
+      await invoke('set_card_order', { ids });
+      refresh();
+    });
+    el.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      const dragging = content.querySelector('.dragging');
+      if (!dragging || dragging === el) return;
+      const box = el.getBoundingClientRect();
+      const before = (e.clientX - box.left) < box.width / 2;
+      el.parentNode.insertBefore(dragging, before ? el : el.nextSibling);
+    });
+  }
   const meta = document.createElement('div');
   meta.className = 'meta';
   const src = (c.sourceApp || 'unknown').replace(/\.(exe|app)$/i, '');
@@ -83,11 +112,14 @@ function cardEl(c) {
     const names = c.preview.split('\n').filter(Boolean);
     meta.innerHTML = `<span class="fileicon">📄</span><span>${names[0] || ''}${names.length > 1 ? ' 等 ' + names.length + ' 项' : ''}</span>`;
   } else {
-    meta.innerHTML = `<span>${typeLabel(c.contentType)}</span><span>·</span><span>${src}</span>`;
+    const icon = { text: '📄', link: '🔗', html: '📝', rtf: '📝', image: '🖼️', files: '📁' }[c.contentType] || '📄';
+    meta.innerHTML = `<span>${icon}</span><span>${src}</span>`;
   }
   el.appendChild(meta);
   el.addEventListener('click', (e) => {
-    if (e.metaKey || e.ctrlKey) { toggleStack(c.id); } else { selectCard(c.id); }
+    if (e.metaKey || e.ctrlKey) { toggleStack(c.id); return; }
+    selectCard(c.id);
+    if (state.layout === 'strip') showPreview(c.id);
   });
   el.addEventListener('dblclick', () => paste(c.id, false));
   return el;
@@ -145,6 +177,16 @@ async function refresh() {
   } else {
     cards = await invoke('recent', { filter: state.filter, limit: 300 });
   }
+  // PasteMate drag-to-order: saved arrangement first (in its order),
+  // unknown/new cards keep recency order after it.
+  if (state.layout === 'strip' && state.cardOrder.length) {
+    const rank = new Map(state.cardOrder.map((id, i) => [id, i]));
+    cards.sort((x, y) => {
+      const rx = rank.has(x.id) ? rank.get(x.id) : state.cardOrder.length;
+      const ry = rank.has(y.id) ? rank.get(y.id) : state.cardOrder.length;
+      return rx - ry;
+    });
+  }
   state.cards = cards;
   if (state.cursor >= cards.length) state.cursor = cards.length - 1;
   render();
@@ -178,7 +220,8 @@ function toggleStack(id) {
 async function paste(id, plain) {
   try {
     await invoke('paste_item', { id, plain, keepOpen: state.keepOpen });
-    if (!state.keepOpen) getCurrent().hide();
+    hidePreview();
+    if (!state.keepOpen && !(state.dockLocked && state.layout !== 'overlay')) getCurrent().hide();
     else refresh();
   } catch (e) { toast('粘贴失败：' + e); }
 }
@@ -231,7 +274,31 @@ document.addEventListener('contextmenu', (e) => {
         state.stackSel = []; refresh(); toast('已合并为新卡片');
       } else toast('先按住 ⌘/Ctrl 点击多选 2 条以上');
     }],
-    ['删除', async () => { await invoke('delete_item', { id }); refresh(); }],
+    ['绑定按键…（全局直接粘贴）', async () => {
+      const c = state.cards.find(x => x.id === id);
+      const v = prompt('输入要绑定的按键（如 3 或 F2），留空解除绑定：', c?.boundKey || '');
+      if (v === null) return;
+      try { await invoke('set_bound_key', { id, key: v.trim() || null }); toast(v.trim() ? '已绑定：' + v.trim() : '已解除绑定'); refresh(); }
+      catch (e) { toast('绑定失败：' + e); }
+    }],
+    ['编辑内容…', async () => {
+      try {
+        const cur = await invoke('item_text', { id });
+        const v = prompt('编辑卡片内容：', cur);
+        if (v === null) return;
+        await invoke('update_item_text', { id, text: v }); toast('已保存'); refresh();
+      } catch (e) { toast('编辑失败：' + e); }
+    }],
+    ['新建空卡片', async () => { await invoke('create_note'); refresh(); }],
+    ['删除（多选时批量删除）', async () => {
+      if (state.stackSel.length >= 2) {
+        await invoke('delete_items', { ids: state.stackSel });
+        state.stackSel = []; toast('已批量删除');
+      } else {
+        await invoke('delete_item', { id });
+      }
+      refresh();
+    }],
   ];
   for (const [label, fn] of items) {
     const it = document.createElement('div');
@@ -244,6 +311,43 @@ document.addEventListener('contextmenu', (e) => {
   }
   document.body.appendChild(menuEl);
 });
+let previewId = null;
+async function showPreview(id) {
+  previewId = id;
+  const box = $('#preview');
+  const c = state.cards.find(x => x.id === id);
+  if (!c) return;
+  box.style.display = 'block';
+  if (c.thumb) {
+    box.innerHTML = '';
+    const img = document.createElement('img');
+    img.src = c.thumb;
+    box.appendChild(img);
+  } else {
+    let text = c.preview;
+    try { text = await invoke('item_text', { id }); } catch {}
+    box.textContent = text || c.preview;
+  }
+  await invoke('set_panel_expanded', { expanded: true });
+}
+async function hidePreview() {
+  if (previewId === null) return;
+  previewId = null;
+  $('#preview').style.display = 'none';
+  await invoke('set_panel_expanded', { expanded: false });
+}
+
+// PasteMate dock lock toggle
+$('#lockbtn')?.addEventListener('click', async () => {
+  state.dockLocked = !state.dockLocked;
+  $('#lockbtn').classList.toggle('on', state.dockLocked);
+  const cfg = await invoke('get_config');
+  cfg.dockLocked = state.dockLocked;
+  await invoke('set_config', { cfg });
+  if (!state.dockLocked) await hidePreview();
+  toast(state.dockLocked ? '卡片带已锁定在屏幕底部' : '已取消锁定');
+});
+
 function closeMenu() { if (menuEl) { menuEl.remove(); menuEl = null; } }
 document.addEventListener('click', (e) => { if (menuEl && !menuEl.contains(e.target)) closeMenu(); });
 
@@ -252,6 +356,8 @@ document.addEventListener('keydown', (e) => {
   if ($('#settings').classList.contains('open')) { if (e.key === 'Escape') closeSettings(); return; }
   if (e.key === 'Escape') {
     if (state.stackSel.length) { state.stackSel = []; render(); return; }
+    if (previewId !== null) { hidePreview(); return; }
+    if (state.dockLocked && state.layout !== 'overlay') { state.cursor = -1; render(); return; }
     getCurrent().hide();
     return;
   }
@@ -296,6 +402,15 @@ async function openSettings() {
   $('#cfg-pause').checked = cfg.pauseRecording;
   $('#cfg-aware').checked = cfg.pasteAware;
   $('#cfg-layout').value = (cfg.panelLayout === 'overlay') ? 'overlay' : 'strip';
+  $('#cfg-theme').value = cfg.theme || 'light';
+  $('#cfg-cardsize').value = cfg.cardSize || 'medium';
+  $('#cfg-dock').checked = !!cfg.dockLocked;
+  state.theme = cfg.theme || 'light';
+  state.cardSize = cfg.cardSize || 'medium';
+  state.cardOrder = cfg.cardOrder || [];
+  state.dockLocked = !!cfg.dockLocked;
+  $('#lockbtn')?.classList.toggle('on', state.dockLocked);
+  applyAppearance();
   $('#cfg-encrypt').checked = !!cfg.encrypt;
   $('#cfg-autolaunch').checked = !!cfg.autoLaunch;
   state.keepOpen = cfg.pasteKeepOpen;
@@ -334,6 +449,12 @@ async function saveSettings() {
   cfg.pasteAware = $('#cfg-aware').checked;
   cfg.panelLayout = $('#cfg-layout').value;
   state.layout = cfg.panelLayout;
+  cfg.theme = $('#cfg-theme').value;
+  cfg.cardSize = $('#cfg-cardsize').value;
+  cfg.dockLocked = $('#cfg-dock').checked;
+  state.dockLocked = cfg.dockLocked;
+  $('#lockbtn').classList.toggle('on', state.dockLocked);
+  applyAppearance();
   cfg.encrypt = $('#cfg-encrypt').checked;
   cfg.autoLaunch = $('#cfg-autolaunch').checked;
   await invoke('set_config', { cfg });
@@ -360,8 +481,21 @@ $('#cfg-logs')?.addEventListener('click', async () => {
   box.style.display = 'block';
 });
 // hotkey uses its own 应用 button (needs re-registration, not a config save)
-['cfg-days', 'cfg-maxmb', 'cfg-keepopen', 'cfg-aware', 'cfg-pause', 'cfg-layout', 'cfg-encrypt', 'cfg-autolaunch']
+['cfg-days', 'cfg-maxmb', 'cfg-keepopen', 'cfg-aware', 'cfg-pause', 'cfg-layout', 'cfg-encrypt', 'cfg-autolaunch', 'cfg-theme', 'cfg-cardsize', 'cfg-dock']
   .forEach(id => $('#' + id).addEventListener('change', saveSettings));
+
+// PasteMate multi-theme + card size (FR-B03 设置项)
+function applyAppearance() {
+  document.body.classList.toggle('light', (state.theme || 'dark') === 'light');
+  document.body.classList.remove('cs-small', 'cs-medium', 'cs-large');
+  document.body.classList.add('cs-' + (state.cardSize || 'medium'));
+}
+$('#cfg-note')?.addEventListener('click', async () => {
+  const id = await invoke('create_note');
+  refresh();
+  const v = prompt('空卡片已创建，输入备忘录内容：', '');
+  if (v) { await invoke('update_item_text', { id, text: v }); refresh(); }
+});
 $('#cfg-export').addEventListener('click', async () => {
   const p = await window.__TAURI__.dialog.save({ defaultPath: 'fastpaste-backup.zip' });
   if (p) { await invoke('export_archive', { path: p }); toast('已导出'); }
@@ -379,6 +513,12 @@ $('#cfg-clear').addEventListener('click', async () => {
   const cfg = await invoke('get_config');
   state.keepOpen = cfg.pasteKeepOpen;
   state.layout = (cfg.panelLayout === 'overlay') ? 'overlay' : 'strip';
+  state.theme = cfg.theme || 'light';
+  state.cardSize = cfg.cardSize || 'medium';
+  state.cardOrder = cfg.cardOrder || [];
+  state.dockLocked = !!cfg.dockLocked;
+  $('#lockbtn')?.classList.toggle('on', state.dockLocked);
+  applyAppearance();
   searchEl.focus();
   refresh();
 })();

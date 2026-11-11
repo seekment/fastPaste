@@ -50,6 +50,10 @@ pub struct ClipMeta {
     pub thumb_ref: Option<String>,
     pub text_length: usize,
     pub preview: String,
+    /// PasteMate-style key binding: pressing this key anywhere pastes the card
+    /// without opening the panel. None = unbound.
+    #[serde(default)]
+    pub bound_key: Option<String>,
 }
 
 /// Full payload persisted in .fpitem, loaded only on preview/paste (FR 5.4).

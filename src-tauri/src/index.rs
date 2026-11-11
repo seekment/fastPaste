@@ -88,6 +88,35 @@ impl SearchIndex {
         self.move_to_front(id);
     }
 
+    /// PasteMate-style key binding badge.
+    pub fn set_bound_key(&mut self, id: u64, key: Option<String>) -> bool {
+        match self.p.items.get_mut(&id) {
+            Some(m) => { m.bound_key = key; true }
+            None => false,
+        }
+    }
+
+    /// Replace an item's indexed text (card content editing). Returns new tokens.
+    pub fn reindex(&mut self, id: u64, new_text: &str) -> Option<Vec<String>> {
+        // purge old token refs
+        let old_toks = self.p.item_tokens.get(&id)?.clone();
+        for t in &old_toks {
+            if let Some(list) = self.p.tokens.get_mut(t) {
+                list.retain(|&x| x != id);
+            }
+        }
+        self.p.tokens.retain(|_, v| !v.is_empty());
+        let mut toks: Vec<String> = crate::tokenizer::tokenize(new_text);
+        toks.sort();
+        toks.dedup();
+        for t in &toks {
+            let e = self.p.tokens.entry(t.clone()).or_default();
+            if let Err(pos) = e.binary_search(&id) { e.insert(pos, id); }
+        }
+        self.p.item_tokens.insert(id, toks.clone());
+        Some(toks)
+    }
+
     pub fn set_pin(&mut self, id: u64, pinned: bool) -> bool {
         match self.p.items.get_mut(&id) {
             Some(m) => { m.pinned = pinned; true }

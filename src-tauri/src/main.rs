@@ -119,6 +119,16 @@ fn main() {
             if let Err(e) = commands::register_hotkey(app.handle(), &config.hotkey) {
                 eprintln!("hotkey registration failed (conflict?): {}", e);
             }
+            // PasteMate-style: re-register every card's bound key.
+            commands::register_bound_keys(app.handle());
+            // A locked dock is persistent: show the strip right at startup.
+            {
+                let st = app.state::<AppState>();
+                let cfg = st.store.lock().config.clone();
+                if cfg.panel_layout != "overlay" && cfg.dock_locked {
+                    commands::show_panel_cmd(app.handle());
+                }
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -128,6 +138,8 @@ fn main() {
             commands::export_archive, commands::import_archive, commands::diagnostics,
             commands::item_text, commands::paste_item, commands::paste_stack, commands::copy_item,
             commands::set_auto_launch, commands::update_hotkey, commands::merge_items,
+            commands::set_bound_key, commands::update_item_text, commands::delete_items,
+            commands::create_note, commands::set_card_order, commands::set_panel_expanded,
         ])
         .run(tauri::generate_context!())
         .expect("error while running fastPaste");

@@ -28,6 +28,8 @@ pub enum WalRecord {
     Touch { id: u64, ts: i64 },
     Remove { id: u64 },
     Pin { id: u64, pinned: bool },
+    Bind { id: u64, key: Option<String> },
+    Edit { id: u64, content_hash: u64, preview: String, text_length: usize, tokens: Vec<String> },
     Clear,
 }
 
@@ -121,6 +123,32 @@ impl Store {
             WalRecord::Touch { id, ts } => index.touch(id, ts),
             WalRecord::Remove { id } => { index.remove(id); },
             WalRecord::Pin { id, pinned } => { index.set_pin(id, pinned); },
+            WalRecord::Bind { id, key } => { index.set_bound_key(id, key); },
+            WalRecord::Edit { id, content_hash, preview, text_length, tokens } => {
+                let mut p = index.snapshot().clone();
+                let mut toks = tokens.clone();
+                toks.sort(); toks.dedup();
+                if let Some(old) = p.item_tokens.get(&id) {
+                    for t in old {
+                        if let Some(l) = p.tokens.get_mut(t) { l.retain(|&x| x != id); }
+                    }
+                }
+                p.tokens.retain(|_, v| !v.is_empty());
+                for t in &toks {
+                    let e = p.tokens.entry(t.clone()).or_default();
+                    if !e.contains(&id) { e.push(id); }
+                    e.sort();
+                }
+                p.item_tokens.insert(id, toks);
+                if let Some(m) = p.items.get_mut(&id) {
+                    if let Some(l) = p.by_hash.remove(&m.content_hash) { if l == id { /* removed */ } }
+                    m.content_hash = content_hash;
+                    m.preview = preview;
+                    m.text_length = text_length;
+                    p.by_hash.insert(content_hash, id);
+                }
+                *index = SearchIndex::from_persisted(p);
+            },
             WalRecord::Clear => {
                 let ids: Vec<u64> = index.snapshot().items.keys().copied().collect();
                 index.remove_many(&ids);
@@ -162,6 +190,7 @@ impl Store {
             thumb_ref: None,
             text_length: clip.text_for_index.len(),
             preview: make_preview(&clip.text_for_index),
+            bound_key: None,
         };
 
         match self.index.add(meta, &clip.text_for_index) {
@@ -267,6 +296,38 @@ impl Store {
         } else {
             Ok(false)
         }
+    }
+
+    /// PasteMate-style key binding.
+    pub fn set_bound_key(&mut self, id: u64, key: Option<String>) -> io::Result<bool> {
+        if self.index.set_bound_key(id, key.clone()) {
+            self.append_wal(&WalRecord::Bind { id, key })?;
+            Ok(true)
+        } else { Ok(false) }
+    }
+
+    /// PasteMate-style card editing: replace text content, re-hash, re-index.
+    pub fn edit_text(&mut self, id: u64, text: &str) -> io::Result<bool> {
+        let meta = match self.index.get(id) { Some(m) => m.clone(), None => return Ok(false) };
+        let mut payload = self.read_payload(id)?;
+        payload.text = Some(text.to_string());
+        self.write_item_file(&meta.item_file, meta.content_type, id, &payload)?;
+        let new_hash = fnv1a(text.as_bytes()) ^ (meta.content_type.to_u8() as u64) << 56;
+        let tokens = match self.index.reindex(id, text) { Some(t) => t, None => return Ok(false) };
+        self.index.snapshot_mut().by_hash.remove(&meta.content_hash);
+        if let Some(m) = self.index.snapshot_mut().items.get_mut(&id) {
+            m.content_hash = new_hash;
+            m.preview = make_preview(text);
+            m.text_length = text.len();
+        }
+        self.index.snapshot_mut().by_hash.insert(new_hash, id);
+        self.append_wal(&WalRecord::Edit { id, content_hash: new_hash, preview: make_preview(text), text_length: text.len(), tokens })?;
+        Ok(true)
+    }
+
+    /// PasteMate-style empty card (memo).
+    pub fn create_note(&mut self) -> io::Result<RecordOutcome> {
+        self.record(IncomingClip::text("", "fastPaste 备忘录"))
     }
 
     pub fn set_pin(&mut self, id: u64, pinned: bool) -> io::Result<bool> {

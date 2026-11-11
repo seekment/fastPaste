@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(default, rename_all = "camelCase")]
 pub struct Config {
     pub hotkey: String,            // e.g. "Control+Shift+V" / "Command+Shift+V"
     pub retention_days: Option<u32>,
@@ -16,6 +16,10 @@ pub struct Config {
     pub paste_aware: bool,         // FR-S09 感知粘贴 mode (macOS default true)
     pub auto_launch: bool,         // FR-B02
     pub privacy_notice_ack: bool,  // FR-B05 / FR-S09
+    pub dock_locked: bool,        // PasteMate: keep the bottom card strip pinned on screen
+    pub theme: String,             // "dark" | "light" (PasteMate multi-theme)
+    pub card_size: String,         // "small" | "medium" | "large"
+    pub card_order: Vec<u64>,      // PasteMate drag-to-order (strip layout)
 }
 
 impl Default for Config {
@@ -36,6 +40,10 @@ impl Default for Config {
             paste_aware: cfg!(target_os = "macos"),
             auto_launch: false,
             privacy_notice_ack: false,
+            dock_locked: false,
+            theme: "light".into(),   // PasteMate default look
+            card_size: "medium".into(),
+            card_order: vec![],
         }
     }
 }
