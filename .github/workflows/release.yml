@@ -27,7 +27,6 @@ jobs:
   macos:
     runs-on: macos-latest
     steps:
-      -
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: tauri-apps/tauri-action@v0
