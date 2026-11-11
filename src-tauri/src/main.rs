@@ -5,7 +5,6 @@
 //! no non-user-initiated network.
 use fastpaste_lib::commands::{self, AppState};
 use fastpaste_lib::monitor::{MonitorCmd, MonitorHandle};
-use fastpaste_lib::paste::Paster;
 use fastpaste_lib::store::Store;
 use parking_lot::Mutex;
 use std::sync::Arc;
@@ -50,7 +49,6 @@ fn main() {
 
     let state = AppState {
         store,
-        paster: Mutex::new(Paster::new()),
         log: Mutex::new(vec![]),
         monitor: MonitorHandle { cmd: monitor_cmd.clone(), manual_only },
     };

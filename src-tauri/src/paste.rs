@@ -2,6 +2,10 @@
 //! Order: (1) write desired content to clipboard via the serial monitor thread,
 //! (2) hide panel, (3) inject Ctrl+V / Cmd+V. Degrades to copy-only when
 //! injection is impossible (sandbox / missing Accessibility permission).
+//!
+//! NOTE: enigo's macOS Enigo holds a CGEventSource (NonNull) and is NOT Send,
+//! so it must never live inside Tauri managed state. A fresh Enigo is created
+//! per paste call instead (user-triggered, low frequency).
 use enigo::{Enigo, Keyboard, Settings};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -11,39 +15,23 @@ pub enum PasteMode {
     CopyOnly, // FR-K08 / no accessibility permission
 }
 
-pub struct Paster {
-    enigo: Option<Enigo>, // lazy: Enigo::new can fail on headless/wayland-less systems
-}
-
-impl Paster {
-    pub fn new() -> Self {
-        Self { enigo: None }
+/// Send the platform paste shortcut to the currently focused app.
+pub fn paste_shortcut() -> Result<(), String> {
+    use enigo::Key;
+    let mut enigo = Enigo::new(&Settings::default()).map_err(|e| e.to_string())?;
+    #[cfg(target_os = "macos")]
+    {
+        enigo.key(Key::Meta, enigo::Direction::Press).map_err(|e| e.to_string())?;
+        enigo.key(Key::Unicode('v'), enigo::Direction::Click).map_err(|e| e.to_string())?;
+        enigo.key(Key::Meta, enigo::Direction::Release).map_err(|e| e.to_string())?;
     }
-
-    fn enigo(&mut self) -> Result<&mut Enigo, String> {
-        if self.enigo.is_none() {
-            self.enigo = Some(Enigo::new(&Settings::default()).map_err(|e| e.to_string())?);
-        }
-        Ok(self.enigo.as_mut().unwrap())
+    #[cfg(not(target_os = "macos"))]
+    {
+        enigo.key(Key::Control, enigo::Direction::Press).map_err(|e| e.to_string())?;
+        enigo.key(Key::Unicode('v'), enigo::Direction::Click).map_err(|e| e.to_string())?;
+        enigo.key(Key::Control, enigo::Direction::Release).map_err(|e| e.to_string())?;
     }
-
-    pub fn paste_shortcut(&mut self) -> Result<(), String> {
-        use enigo::Key;
-        let enigo = self.enigo()?;
-        #[cfg(target_os = "macos")]
-        {
-            enigo.key(Key::Meta, enigo::Direction::Press).map_err(|e| e.to_string())?;
-            enigo.key(Key::Unicode('v'), enigo::Direction::Click).map_err(|e| e.to_string())?;
-            enigo.key(Key::Meta, enigo::Direction::Release).map_err(|e| e.to_string())?;
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            enigo.key(Key::Control, enigo::Direction::Press).map_err(|e| e.to_string())?;
-            enigo.key(Key::Unicode('v'), enigo::Direction::Click).map_err(|e| e.to_string())?;
-            enigo.key(Key::Control, enigo::Direction::Release).map_err(|e| e.to_string())?;
-        }
-        Ok(())
-    }
+    Ok(())
 }
 
 /// FR-K08 / 3.4: decide whether keystroke injection is allowed on this platform.

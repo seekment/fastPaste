@@ -2,7 +2,7 @@
 use crate::config::Config;
 use crate::models::*;
 use crate::monitor::{MonitorCmd, MonitorHandle, MonitorEvent};
-use crate::paste::{PasteMode, Paster};
+use crate::paste::PasteMode;
 use crate::store::Store;
 use parking_lot::Mutex;
 use serde::Serialize;
@@ -13,7 +13,6 @@ use tauri::{Emitter, Manager, State};
 pub struct AppState {
     pub store: Arc<Mutex<Store>>,
     pub monitor: MonitorHandle,
-    pub paster: Mutex<Paster>,
     pub log: Mutex<Vec<String>>,
 }
 
@@ -226,10 +225,9 @@ pub fn paste_item(app: tauri::AppHandle, state: State<'_, AppState>, id: u64, pl
 
     if !crate::paste::can_inject() {
         state.log("paste degraded to copy-only (no accessibility / sandbox)".into());
-        let _ = PasteMode::CopyOnly;
         return Ok(()); // FR-K08: content is on clipboard; user pastes manually
     }
-    state.paster.lock().paste_shortcut()
+    crate::paste::paste_shortcut()
 }
 
 /// FR-A02 Paste Stack: paste selected ids in order with separator.
@@ -262,7 +260,7 @@ pub fn paste_stack(app: tauri::AppHandle, state: State<'_, AppState>, ids: Vec<u
     }
     std::thread::sleep(std::time::Duration::from_millis(80));
     if crate::paste::can_inject() {
-        state.paster.lock().paste_shortcut()
+        crate::paste::paste_shortcut()
     } else {
         Ok(())
     }
