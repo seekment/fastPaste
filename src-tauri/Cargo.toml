@@ -1,6 +1,6 @@
 [package]
 name = "fastpaste"
-version = "0.3.6"
+version = "0.3.7"
 description = "fastPaste - small & stable cross-platform clipboard manager (no external DB)"
 edition = "2021"
 
