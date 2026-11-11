@@ -429,7 +429,7 @@ fn load_cipher(dir: &Path, cfg: &Config) -> io::Result<Option<Aes256Gcm>> {
             k
         }
     };
-    Aes256Gcm::new_from_slice(&key).map(Some).map_err(io::Error::other)
+    Ok(Some(Aes256Gcm::new_from_slice(&key).expect("32-byte AES key")))
 }
 
 fn seal(cipher: &Aes256Gcm, data: &[u8]) -> io::Result<Vec<u8>> {

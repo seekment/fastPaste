@@ -66,7 +66,7 @@ fn main() {
 
             // FR-B02: honor auto-launch setting at startup.
             if config.auto_launch {
-                let _ = app.auto_launch().enable();
+                let _ = app.autolaunch().enable();
             }
 
             // FR-B01: tray / menu-bar icon.

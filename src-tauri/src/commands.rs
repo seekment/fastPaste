@@ -4,6 +4,7 @@ use crate::models::*;
 use crate::monitor::{MonitorCmd, MonitorHandle, MonitorEvent};
 use crate::store::Store;
 use parking_lot::Mutex;
+use std::sync::Arc;
 use serde::Serialize;
 use std::sync::mpsc::channel;
 use tauri::{Emitter, Manager, State};
@@ -348,7 +349,7 @@ fn hotkey_handler(app: &tauri::AppHandle, _s: &tauri_plugin_global_shortcut::Sho
 #[tauri::command]
 pub fn set_auto_launch(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
     use tauri_plugin_autostart::ManagerExt;
-    let al = app.auto_launch();
+    let al = app.autolaunch();
     if enabled { al.enable() } else { al.disable() }
         .map_err(|e| format!("auto-launch failed: {}", e))
 }
