@@ -3,10 +3,10 @@ name: release
 on:
   push:
     tags: ["v*"]
-  workflow_dispatch:   # 允许手动触发
+  workflow_dispatch:
 
 permissions:
-  contents: write     # 允许创建 Release 和上传产物
+  contents: write
 
 jobs:
   windows:
@@ -28,7 +28,11 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+      # universal-apple-darwin needs BOTH Intel and Apple Silicon std libs;
+      # macos-latest runners only preinstall aarch64-apple-darwin.
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin,aarch64-apple-darwin
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -36,5 +40,6 @@ jobs:
           args: --target universal-apple-darwin
           tagName: v__VERSION__
           releaseName: fastPaste v__VERSION__
+          releaseBody: "See README"
           releaseDraft: true
           prerelease: false

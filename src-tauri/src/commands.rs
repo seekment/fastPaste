@@ -2,7 +2,6 @@
 use crate::config::Config;
 use crate::models::*;
 use crate::monitor::{MonitorCmd, MonitorHandle, MonitorEvent};
-use crate::paste::PasteMode;
 use crate::store::Store;
 use parking_lot::Mutex;
 use serde::Serialize;
