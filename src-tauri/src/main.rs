@@ -62,6 +62,14 @@ fn main() {
             commands::forward_events(app.handle().clone(), events_rx);
 
             // FR-B01: tray / menu-bar icon.
+            // MenuBuilder::items() returns &mut Self (not Result) in tauri 2 - only build() ?'s.
+            let open = tauri::menu::MenuItem::with_id(app, "open", "打开面板", true, None::<&str>)?;
+            let pause = tauri::menu::MenuItem::with_id(app, "pause", "暂停记录", true, None::<&str>)?;
+            let settings = tauri::menu::MenuItem::with_id(app, "settings", "设置…", true, None::<&str>)?;
+            let quit = tauri::menu::MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
+            let menu = tauri::menu::MenuBuilder::new(app)
+                .items(&[&open, &pause, &settings, &quit])
+                .build()?;
             let _tray = tauri::tray::TrayIconBuilder::new()
                 .tooltip("fastPaste")
                 .icon(app.default_window_icon().unwrap().clone())
@@ -70,12 +78,7 @@ fn main() {
                         show_panel(tray.app_handle());
                     }
                 })
-                .menu(&tauri::menu::MenuBuilder::new(app).items(&[
-                    &tauri::menu::MenuItem::with_id(app, "open", "打开面板", true, None::<&str>)?,
-                    &tauri::menu::MenuItem::with_id(app, "pause", "暂停记录", true, None::<&str>)?,
-                    &tauri::menu::MenuItem::with_id(app, "settings", "设置…", true, None::<&str>)?,
-                    &tauri::menu::MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?,
-                ])?.build()?)
+                .menu(&menu)
                 .on_menu_event(|app, event| match event.id().as_ref() {
                     "open" => show_panel(app),
                     "settings" => {
@@ -103,12 +106,13 @@ fn main() {
                 .build(app)?;
 
             // FR-K01: global hotkey; conflict -> refuse registration & log.
-            let hk = config.hotkey.clone();
-            let app_handle = app.handle().clone();
-            app.global_shortcut().on_shortcut(hk, move |app, _shortcut, event| {
+            // on_shortcut accepts a pre-parsed Shortcut (String TryInto is not
+            // implemented for the plugin's ShortcutWrapper).
+            let hk: tauri_plugin_global_shortcut::Shortcut = config.hotkey.parse()
+                .unwrap_or_else(|_| panic!("invalid hotkey: {}", config.hotkey));
+            app.global_shortcut().on_shortcut(hk, |app, _shortcut, event| {
                 if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
                     show_panel(app);
-                    let _ = app_handle;
                 }
             }).unwrap_or_else(|e| {
                 eprintln!("hotkey registration failed (conflict?): {}", e);
