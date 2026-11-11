@@ -10,7 +10,6 @@ use parking_lot::Mutex;
 use std::sync::Arc;
 use tauri::{Emitter, Manager, WindowEvent};
 use tauri_plugin_autostart::ManagerExt;
-use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
 fn data_dir() -> std::path::PathBuf {
     #[cfg(target_os = "macos")]
@@ -46,7 +45,10 @@ fn main() {
     };
 
     tauri::Builder::default()
-        .plugin(tauri_plugin_autostart::init())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .manage(state)
         .setup(move |app| {
