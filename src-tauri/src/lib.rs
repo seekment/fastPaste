@@ -1,6 +1,7 @@
 //! fastPaste library root: storage + index + monitor are platform-agnostic and
 //! unit-testable on any OS (capture itself is platform-gated).
 pub mod clipboard;
+#[cfg(feature = "app")]
 pub mod commands;
 pub mod config;
 pub mod index;

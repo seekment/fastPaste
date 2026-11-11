@@ -84,7 +84,8 @@ fn make_thumbnail(bytes: &[u8]) -> Option<Vec<u8>> {
     let fmt = if bytes.starts_with(b"BM") { image::ImageFormat::Bmp }
         else { image::ImageFormat::Png };
     let img = image::load_from_memory_with_format(bytes, fmt).ok()?;
-    let thumb = image::imageops::thumbnail(&img, 320, 320);
+    // image 0.25 thumbnail() returns ImageBuffer, not DynamicImage - wrap before write_to
+    let thumb = image::DynamicImage::ImageRgba8(image::imageops::thumbnail(&img, 320, 320));
     let mut out = std::io::Cursor::new(Vec::new());
     thumb.write_to(&mut out, image::ImageFormat::Png).ok()?;
     Some(out.into_inner())

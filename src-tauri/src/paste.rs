@@ -12,27 +12,35 @@ pub enum PasteMode {
 }
 
 pub struct Paster {
-    enigo: Enigo,
+    enigo: Option<Enigo>, // lazy: Enigo::new can fail on headless/wayland-less systems
 }
 
 impl Paster {
     pub fn new() -> Self {
-        Self { enigo: Enigo::new(&Settings::default()).expect("enigo init") }
+        Self { enigo: None }
+    }
+
+    fn enigo(&mut self) -> Result<&mut Enigo, String> {
+        if self.enigo.is_none() {
+            self.enigo = Some(Enigo::new(&Settings::default()).map_err(|e| e.to_string())?);
+        }
+        Ok(self.enigo.as_mut().unwrap())
     }
 
     pub fn paste_shortcut(&mut self) -> Result<(), String> {
         use enigo::Key;
+        let enigo = self.enigo()?;
         #[cfg(target_os = "macos")]
         {
-            self.enigo.key(Key::Meta, enigo::Direction::Press).map_err(|e| e.to_string())?;
-            self.enigo.key(Key::Unicode('v'), enigo::Direction::Click).map_err(|e| e.to_string())?;
-            self.enigo.key(Key::Meta, enigo::Direction::Release).map_err(|e| e.to_string())?;
+            enigo.key(Key::Meta, enigo::Direction::Press).map_err(|e| e.to_string())?;
+            enigo.key(Key::Unicode('v'), enigo::Direction::Click).map_err(|e| e.to_string())?;
+            enigo.key(Key::Meta, enigo::Direction::Release).map_err(|e| e.to_string())?;
         }
         #[cfg(not(target_os = "macos"))]
         {
-            self.enigo.key(Key::Control, enigo::Direction::Press).map_err(|e| e.to_string())?;
-            self.enigo.key(Key::Unicode('v'), enigo::Direction::Click).map_err(|e| e.to_string())?;
-            self.enigo.key(Key::Control, enigo::Direction::Release).map_err(|e| e.to_string())?;
+            enigo.key(Key::Control, enigo::Direction::Press).map_err(|e| e.to_string())?;
+            enigo.key(Key::Unicode('v'), enigo::Direction::Click).map_err(|e| e.to_string())?;
+            enigo.key(Key::Control, enigo::Direction::Release).map_err(|e| e.to_string())?;
         }
         Ok(())
     }

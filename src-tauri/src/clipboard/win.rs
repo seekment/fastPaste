@@ -1,17 +1,21 @@
 //! Windows clipboard: WM_CLIPBOARDUPDATE observer + careful single-format reads.
 //! Implements FR-S01 (delayed read), FR-S02 (probe -> one format), FR-S03 (backoff
-//! retry plan is applied by the monitor), FR-S04 (transient format filter),
+//! retry plan applied by the monitor), FR-S04 (transient format filter),
 //! FR-S05 (clean write-back).
+//!
+//! NOTE: in this dependency tree HANDLE/HWND/HGLOBAL are *mut c_void, so all
+//! null tests use .is_null(). AddClipboardFormatListener /
+//! RemoveClipboardFormatListener live in Win32::System::DataExchange here.
 use super::RawClip;
 use once_cell::sync::OnceCell;
 use std::sync::mpsc::Sender;
-use windows_sys::core::PCWSTR;
-use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, HWND, LPARAM, LRESULT, WPARAM};
+use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, LPARAM, LRESULT, WPARAM};
 use windows_sys::Win32::System::DataExchange::{
-    CloseClipboard, EnumClipboardFormats, GetClipboardData, GetClipboardOwner, OpenClipboard,
-    RegisterClipboardFormatW, SetClipboardData, EmptyClipboard,
+    AddClipboardFormatListener, CloseClipboard, EmptyClipboard, EnumClipboardFormats,
+    GetClipboardData, GetClipboardOwner, OpenClipboard, RegisterClipboardFormatW,
+    RemoveClipboardFormatListener, SetClipboardData,
 };
-use windows_sys::Win32::System::Memory::{GlobalLock, GlobalSize, GlobalUnlock};
+use windows_sys::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock, GMEM_MOVEABLE};
 use windows_sys::Win32::System::Threading::{OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION};
 use windows_sys::Win32::UI::Shell::DragQueryFileW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
@@ -47,7 +51,7 @@ fn formats() -> &'static Formats {
     })
 }
 
-unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+unsafe extern "system" fn wnd_proc(hwnd: *mut std::ffi::c_void, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     if msg == WM_CLIPBOARDUPDATE {
         if let Some(tx) = CLIP_TX.get() { let _ = tx.send(()); }
         return 0;
@@ -71,9 +75,12 @@ pub fn spawn_listener(tx: Sender<()>) -> std::thread::JoinHandle<()> {
             wc.lpfnWndProc = Some(wnd_proc);
             wc.lpszClassName = class_name.as_ptr();
             RegisterClassW(&wc);
-            let hwnd = CreateWindowExW(0, class_name.as_ptr(), title.as_ptr(),
-                0, 0, 0, 0, 0, HWND_MESSAGE, std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut());
-            if hwnd == 0 { return; }
+            let hwnd = CreateWindowExW(
+                0, class_name.as_ptr(), title.as_ptr(), 0,
+                0, 0, 0, 0, HWND_MESSAGE,
+                std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut(),
+            );
+            if hwnd.is_null() { return; }
             if AddClipboardFormatListener(hwnd) == 0 { return; }
             let mut msg: MSG = std::mem::zeroed();
             while GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) > 0 {
@@ -87,12 +94,12 @@ pub fn spawn_listener(tx: Sender<()>) -> std::thread::JoinHandle<()> {
 pub fn source_app_name() -> String {
     unsafe {
         let owner = GetClipboardOwner();
-        if owner == 0 { return String::new(); }
+        if owner.is_null() { return String::new(); }
         let mut pid: u32 = 0;
         GetWindowThreadProcessId(owner, &mut pid);
         if pid == 0 { return String::new(); }
         let proc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
-        if proc == 0 { return String::new(); }
+        if proc.is_null() { return String::new(); }
         let mut buf = [0u16; 260];
         let mut len = buf.len() as u32;
         let ok = QueryFullProcessImageNameW(proc, 0, buf.as_mut_ptr(), &mut len);
@@ -106,7 +113,7 @@ pub fn source_app_name() -> String {
 fn read_handle(format: u32) -> Option<Vec<u8>> {
     unsafe {
         let h: HANDLE = GetClipboardData(format);
-        if h == 0 { return None; }
+        if h.is_null() { return None; }
         let ptr = GlobalLock(h);
         if ptr.is_null() { return None; }
         let size = GlobalSize(h) as usize;
@@ -127,13 +134,14 @@ fn read_text() -> Option<String> {
 fn read_files() -> Option<Vec<String>> {
     unsafe {
         let h: HANDLE = GetClipboardData(CF_HDROP);
-        if h == 0 { return None; }
-        let count = DragQueryFileW(h as *mut std::ffi::c_void, 0xFFFFFFFF, std::ptr::null_mut(), 0);
+        if h.is_null() { return None; }
+        let hdrop = h as *mut std::ffi::c_void;
+        let count = DragQueryFileW(hdrop, 0xFFFFFFFF, std::ptr::null_mut(), 0);
         let mut out = Vec::new();
         for i in 0..count {
-            let len = DragQueryFileW(h as *mut std::ffi::c_void, i, std::ptr::null_mut(), 0);
+            let len = DragQueryFileW(hdrop, i, std::ptr::null_mut(), 0);
             let mut buf = vec![0u16; len as usize + 1];
-            DragQueryFileW(h as *mut std::ffi::c_void, i, buf.as_mut_ptr(), len + 1);
+            DragQueryFileW(hdrop, i, buf.as_mut_ptr(), len + 1);
             out.push(String::from_utf16_lossy(&buf[..len as usize]));
         }
         Some(out)
@@ -179,7 +187,6 @@ pub fn read_primary(_app_override: Option<&str>) -> Option<(RawClip, String)> {
             } else if has(f.html) {
                 let raw = read_handle(f.html)?;
                 let s = String::from_utf8_lossy(&raw);
-                // strip CF_HTML header block (everything before <!DOCTYPE/html)
                 let body = s.find("<!").map(|i| &s[i..]).unwrap_or(&s).to_string();
                 RawClip::Html(body)
             } else if has(f.rtf) {
@@ -200,7 +207,6 @@ pub fn read_primary(_app_override: Option<&str>) -> Option<(RawClip, String)> {
 /// FR-S05: write only the content itself (CF_UNICODETEXT and/or HTML Format),
 /// then close immediately. No private marker formats.
 pub fn write_clipboard(text: Option<&str>, html: Option<&str>) -> bool {
-    use windows_sys::Win32::System::Memory::{GlobalAlloc, GMEM_MOVEABLE};
     unsafe {
         if OpenClipboard(std::ptr::null_mut()) == 0 { return false; }
         let ok = (|| {
@@ -210,11 +216,11 @@ pub fn write_clipboard(text: Option<&str>, html: Option<&str>) -> bool {
                 let wide: Vec<u16> = t.encode_utf16().chain(std::iter::once(0)).collect();
                 let bytes = wide.len() * 2;
                 let h = GlobalAlloc(GMEM_MOVEABLE, bytes);
-                if h == 0 { return false; }
+                if h.is_null() { return false; }
                 let ptr = GlobalLock(h);
                 std::ptr::copy_nonoverlapping(wide.as_ptr() as *const u8, ptr as *mut u8, bytes);
                 GlobalUnlock(h);
-                if SetClipboardData(CF_UNICODETEXT, h) == 0 { return false; }
+                if SetClipboardData(CF_UNICODETEXT, h).is_null() { return false; }
             }
             if let Some(hs) = html {
                 let s = format!(
@@ -222,11 +228,11 @@ pub fn write_clipboard(text: Option<&str>, html: Option<&str>) -> bool {
                     97, 97 + 58 + hs.len(), 97 + 32, 97 + 32 + hs.len(), hs);
                 let b = s.as_bytes();
                 let h = GlobalAlloc(GMEM_MOVEABLE, b.len());
-                if h == 0 { return false; }
+                if h.is_null() { return false; }
                 let ptr = GlobalLock(h);
                 std::ptr::copy_nonoverlapping(b.as_ptr(), ptr as *mut u8, b.len());
                 GlobalUnlock(h);
-                if SetClipboardData(f.html, h) == 0 { return false; }
+                if SetClipboardData(f.html, h).is_null() { return false; }
             }
             true
         })();

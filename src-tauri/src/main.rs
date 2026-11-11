@@ -1,3 +1,5 @@
+#![cfg(feature = "app")]
+
 //! fastPaste entry point: single instance, tray, global hotkey, panel window.
 //! V2.0 constraints honored here: no DB process, no bundled Chromium,
 //! no non-user-initiated network.
