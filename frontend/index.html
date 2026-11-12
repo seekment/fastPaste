@@ -75,7 +75,7 @@
 
   .card {
     position: relative; flex: 0 0 auto;
-    width: 170px; height: 122px;
+    width: 200px; height: 142px;
     background: var(--card);
     border: 1px solid rgba(255,255,255,0.06);
     border-radius: 16px; padding: 12px;
@@ -128,9 +128,9 @@
   body.light #settings { background: #f4f4f8; }
   body.light #toast { background: rgba(30,30,36,0.85); color: #f2f2f6; }
 
-  /* PasteMate-style card size setting */
-  body.cs-small .card { width: 128px; height: 92px; }
-  body.cs-large .card { width: 220px; height: 150px; }
+  /* PasteMate-style card size setting (bigger defaults) */
+  body.cs-small .card { width: 156px; height: 108px; }
+  body.cs-large .card { width: 264px; height: 184px; }
 
   /* bound key badge (PasteMate key binding) */
   .card .keybind {
@@ -206,12 +206,19 @@
       <div class="tab" data-f="image">图片</div>
       <div class="tab" data-f="files">文件</div>
       <span style="flex:1"></span>
+      <span id="ver" style="font-size:10px;color:var(--fg-dim);align-self:center;margin-right:2px"></span>
+      <div class="tab ghost" id="layoutbtn" title="切换布局：底部条带 ⇄ 居中卡片墙">🔀</div>
       <div class="tab ghost" id="lockbtn" title="锁定卡片带常驻屏幕底部（类似 PasteMate 停靠）">📌</div>
       <div class="tab ghost" id="settingsbtn">⚙ 设置</div>
+      <div class="tab ghost" id="closebtn" title="关闭（隐藏到托盘；右键托盘图标可退出程序）">✕</div>
     </div>
   </header>
   <div id="preview"></div>
   <div id="content"></div>
+  <div id="boot-note" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:8px;color:#8e8e98;font-size:13px;pointer-events:none;">
+    <div>正在启动 fastPaste…</div>
+    <div style="font-size:11px;opacity:.7">若此提示一直显示，说明界面脚本未运行</div>
+  </div>
   <div id="toast"></div>
 
   <div id="settings">

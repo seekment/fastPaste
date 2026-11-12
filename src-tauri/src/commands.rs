@@ -313,7 +313,15 @@ pub fn forward_events(app: tauri::AppHandle, events: std::sync::mpsc::Receiver<M
 
 // ---------------- shared panel / hotkey helpers (used by main.rs too) ----------------
 
-/// Show the panel honoring the configured layout (FR-K06).
+/// Fit a size (fraction of the primary monitor) in physical pixels.
+fn fit(mw: u32, mh: u32, frac_w: f64, frac_h: f64, max_w: f64, max_h: f64) -> (f64, f64) {
+    let w = ((mw as f64) * frac_w).min(max_w).max(640.0);
+    let h = ((mh as f64) * frac_h).min(max_h).max(360.0);
+    (w, h)
+}
+
+/// Show the panel honoring the configured layout (FR-K06). Window geometry
+/// adapts to the actual screen size (physical pixels, DPI-aware).
 pub fn show_panel_cmd(app: &tauri::AppHandle) {
     if let Some(w) = app.get_webview_window("panel") {
         let layout = if let Some(st) = app.try_state::<AppState>() {
@@ -321,19 +329,23 @@ pub fn show_panel_cmd(app: &tauri::AppHandle) {
         } else {
             "overlay".to_string()
         };
+        let mon = app.primary_monitor().ok().flatten();
+        let (mw, mh) = mon.as_ref()
+            .map(|m| (m.size().width, m.size().height))
+            .unwrap_or((1920, 1080));
         if layout == "strip" || layout == "compact" {
             // PasteMate-style bottom edge card strip (FR-K06 alt layout)
-            let _ = w.set_size(tauri::LogicalSize { width: 1000.0, height: 240.0 });
-            if let Ok(Some(m)) = app.primary_monitor() {
-                let pos = tauri::PhysicalPosition {
-                    x: ((m.size().width as i32) - 1000) / 2,
-                    y: (m.size().height as i32) - 270,
-                };
-                let _ = w.set_position(pos);
-            }
+            let (pw, ph) = fit(mw, mh, 0.82, 0.0, 1280.0, 240.0);
+            let _ = w.set_size(tauri::PhysicalSize { width: pw as u32, height: 240 });
+            let taskbar = 60; // leave room for the taskbar
+            let _ = w.set_position(tauri::PhysicalPosition {
+                x: ((mw as i32) - pw as i32) / 2,
+                y: (mh as i32) - 240 - taskbar,
+            });
         } else {
             // centered overlay card wall (Paste-style, FR-K06)
-            let _ = w.set_size(tauri::LogicalSize { width: 980.0, height: 620.0 });
+            let (pw, ph) = fit(mw, mh, 0.72, 0.72, 1180.0, 760.0);
+            let _ = w.set_size(tauri::PhysicalSize { width: pw as u32, height: ph as u32 });
             let _ = w.center();
         }
         let _ = w.show();
@@ -509,14 +521,15 @@ pub fn set_panel_expanded(app: tauri::AppHandle, expanded: bool) -> Result<(), S
             st.store.lock().config.panel_layout.clone()
         } else { "overlay".into() };
         if layout == "strip" || layout == "compact" {
-            let h = if expanded { 440.0 } else { 240.0 };
-            let _ = w.set_size(tauri::LogicalSize { width: 1000.0, height: h });
-            if let Ok(Some(m)) = app.primary_monitor() {
-                let _ = w.set_position(tauri::PhysicalPosition {
-                    x: ((m.size().width as i32) - 1000) / 2,
-                    y: (m.size().height as i32) - (h as i32) - 30,
-                });
-            }
+            let mon = app.primary_monitor().ok().flatten();
+            let (mw, mh) = mon.as_ref().map(|m| (m.size().width, m.size().height)).unwrap_or((1920, 1080));
+            let h = if expanded { 460 } else { 240 };
+            let pw = ((mw as f64) * 0.82).min(1280.0) as u32;
+            let _ = w.set_size(tauri::PhysicalSize { width: pw, height: h });
+            let _ = w.set_position(tauri::PhysicalPosition {
+                x: ((mw as i32) - pw as i32) / 2,
+                y: (mh as i32) - h - 60,
+            });
         }
     }
     Ok(())

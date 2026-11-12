@@ -337,6 +337,29 @@ async function hidePreview() {
   await invoke('set_panel_expanded', { expanded: false });
 }
 
+// Explicit close button: hides to tray. Refuses when dock is pinned.
+$('#closebtn')?.addEventListener('click', async () => {
+  if (state.dockLocked && state.layout !== 'overlay') {
+    toast('已锁定停靠，先点 📌 取消锁定再关闭');
+    return;
+  }
+  await hidePreview();
+  getCurrent().hide();
+});
+
+// Quick layout toggle without opening settings (🔀)
+$('#layoutbtn')?.addEventListener('click', async () => {
+  state.layout = state.layout === 'strip' ? 'overlay' : 'strip';
+  const cfg = await invoke('get_config');
+  cfg.panelLayout = state.layout;
+  await invoke('set_config', { cfg });
+  await hidePreview();
+  await invoke('set_panel_expanded', { expanded: false });
+  state.cursor = -1;
+  refresh();
+  toast(state.layout === 'strip' ? '已切换：底部条带' : '已切换：居中卡片墙');
+});
+
 // PasteMate dock lock toggle
 $('#lockbtn')?.addEventListener('click', async () => {
   state.dockLocked = !state.dockLocked;
@@ -510,6 +533,10 @@ $('#cfg-clear').addEventListener('click', async () => {
 
 /* init */
 (async () => {
+  // self-check: hide static boot note (proves JS alive); stamp version
+  const boot = document.getElementById('boot-note');
+  if (boot) boot.style.display = 'none';
+  try { document.getElementById('ver').textContent = 'v' + await window.__TAURI__.app.getVersion(); } catch {}
   const cfg = await invoke('get_config');
   state.keepOpen = cfg.pasteKeepOpen;
   state.layout = (cfg.panelLayout === 'overlay') ? 'overlay' : 'strip';
