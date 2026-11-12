@@ -11,6 +11,23 @@ use std::sync::Arc;
 use tauri::{Emitter, Manager, WindowEvent};
 use tauri_plugin_autostart::ManagerExt;
 
+fn install_panic_hook() {
+    std::panic::set_hook(Box::new(|info| {
+        let msg = format!("{} PANIC: {}\n", chrono_now(), info);
+        let dir = data_dir();
+        let _ = std::fs::create_dir_all(&dir);
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("panic.log")) {
+            use std::io::Write;
+            let _ = f.write_all(msg.as_bytes());
+        }
+    }));
+}
+
+fn chrono_now() -> String {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+        .map(|d| format!("{:?}", d)).unwrap_or_default()
+}
+
 fn data_dir() -> std::path::PathBuf {
     #[cfg(target_os = "macos")]
     let base = std::env::var_os("HOME").map(std::path::PathBuf::from)
@@ -22,9 +39,14 @@ fn data_dir() -> std::path::PathBuf {
 }
 
 fn main() {
-    // Single instance (2.1): second launch signals the running one and exits.
+    install_panic_hook();
+
+    // Single instance (2.1): the SECOND launch connects to 46371, which the
+    // running instance listens on - and responds by RAISING its panel. Then
+    // the second process exits. No more silently dead launches.
     if std::net::TcpListener::bind("127.0.0.1:46371").is_err() {
         let _ = std::net::TcpStream::connect("127.0.0.1:46371");
+        std::thread::sleep(std::time::Duration::from_millis(50));
         return;
     }
 
@@ -54,15 +76,41 @@ fn main() {
         .setup(move |app| {
             commands::forward_events(app.handle().clone(), events_rx);
 
+            // Single-instance raise server: any further launch (any shortcut,
+            // any stray exe copy) surfaces THIS instance's panel instead of
+            // silently doing nothing.
+            {
+                let app_handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    if let Ok(listener) = std::net::TcpListener::bind("127.0.0.1:46371") {
+                        for _stream in listener.incoming() {
+                            commands::show_panel_cmd(&app_handle);
+                        }
+                    }
+                });
+            }
+
             // QQ-style close: the X button hides the panel instead of quitting.
             // Only the tray menu 退出 terminates the app.
             if let Some(panel) = app.get_webview_window("panel") {
                 let panel_clone = panel.clone();
-                panel.on_window_event(move |event| {
-                    if let WindowEvent::CloseRequested { api, .. } = event {
+                panel.on_window_event(move |event| match event {
+                    WindowEvent::CloseRequested { api, .. } => {
                         api.prevent_close();
                         let _ = panel_clone.hide();
                     }
+                    // Paste-like: hide as soon as focus leaves the panel,
+                    // unless the user locked the dock (PasteMate-style strip).
+                    WindowEvent::Focused(false) => {
+                        let docked = if let Some(st) = panel_clone.app_handle().try_state::<AppState>() {
+                            let cfg = st.store.lock().config.clone();
+                            cfg.panel_layout != "overlay" && cfg.dock_locked
+                        } else { false };
+                        if !docked {
+                            let _ = panel_clone.hide();
+                        }
+                    }
+                    _ => {}
                 });
             }
 
@@ -121,6 +169,10 @@ fn main() {
             }
             // PasteMate-style: re-register every card's bound key.
             commands::register_bound_keys(app.handle());
+            {
+                let st = app.state::<AppState>();
+                st.log("setup complete".into());
+            }
             // A locked dock is persistent: show the strip right at startup.
             {
                 let st = app.state::<AppState>();
