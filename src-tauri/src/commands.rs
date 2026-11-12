@@ -335,7 +335,7 @@ pub fn show_panel_cmd(app: &tauri::AppHandle) {
             .unwrap_or((1920, 1080));
         if layout == "strip" || layout == "compact" {
             // PasteMate-style bottom edge card strip (FR-K06 alt layout)
-            let (pw, ph) = fit(mw, mh, 0.82, 0.0, 1280.0, 240.0);
+            let (pw, _ph) = fit(mw, mh, 0.82, 0.0, 1280.0, 240.0);
             let _ = w.set_size(tauri::PhysicalSize { width: pw as u32, height: 240 });
             let taskbar = 60; // leave room for the taskbar
             let _ = w.set_position(tauri::PhysicalPosition {
@@ -528,7 +528,7 @@ pub fn set_panel_expanded(app: tauri::AppHandle, expanded: bool) -> Result<(), S
             let _ = w.set_size(tauri::PhysicalSize { width: pw, height: h });
             let _ = w.set_position(tauri::PhysicalPosition {
                 x: ((mw as i32) - pw as i32) / 2,
-                y: (mh as i32) - h - 60,
+                y: (mh as i32) - (h as i32) - 60,
             });
         }
     }
